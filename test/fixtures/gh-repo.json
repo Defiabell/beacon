@@ -1,0 +1,8 @@
+{
+  "stargazers_count": 128,
+  "forks_count": 14,
+  "description": "Cross-device clipboard and image relay pool",
+  "topics": ["clipboard", "selfhosted", "sync"],
+  "homepage": "https://shotsync.example.com",
+  "license": { "key": "mit", "name": "MIT License", "spdx_id": "MIT" }
+}
