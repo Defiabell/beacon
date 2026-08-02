@@ -106,5 +106,7 @@ export async function fetchPostMetrics(
       return fetchHnMetrics(url, fetchFn);
     case "reddit":
       return fetchRedditMetrics(url, fetchFn);
+    default:
+      throw new Error(`unknown platform: ${platform}`);
   }
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { detectPlatform, fetchPostMetrics } from "../src/collect/posts";
+import type { Platform } from "../src/types";
 import v2exFixture from "./fixtures/v2ex-topic.json";
 import linuxdoFixture from "./fixtures/linuxdo-topic.json";
 import hnFixture from "./fixtures/hn-item.json";
@@ -157,5 +158,12 @@ describe("fetchPostMetrics: shared behavior", () => {
     await expect(
       fetchPostMetrics("https://www.v2ex.com/t/1229945", "v2ex", bad)
     ).rejects.toThrow(/500/);
+  });
+
+  it("throws for an unknown/malformed platform value instead of resolving undefined", async () => {
+    const stub: typeof fetch = async () => Response.json(v2exFixture);
+    await expect(
+      fetchPostMetrics("https://www.v2ex.com/t/1229945", "bogus" as Platform, stub)
+    ).rejects.toThrow(/unknown platform/);
   });
 });
