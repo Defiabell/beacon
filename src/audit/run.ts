@@ -96,7 +96,7 @@ function isGithubHosted(url: string): boolean {
 // The github.com exemption is applied here, before the MAX_LINKS_CHECKED
 // truncation — not after. READMEs commonly front-load github.com
 // self-references (badges, Actions/Issues links), and those never need
-// checking; counting them against the 20-link budget would silently push
+// checking; counting them against the link-check budget (MAX_LINKS_CHECKED) would silently push
 // real external links out of the check entirely on a link-heavy README.
 function extractReadmeLinks(readme: string): string[] {
   const matches = readme.match(/https?:\/\/[^\s)"'<>]+/g) ?? [];
