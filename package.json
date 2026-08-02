@@ -2,9 +2,15 @@
   "name": "beacon",
   "private": true,
   "type": "module",
-  "scripts": { "test": "vitest run", "deploy": "wrangler deploy", "dev": "wrangler dev" },
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit && tsc -p test --noEmit",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.8.19",
+    "@cloudflare/workers-types": "^4.20260702.1",
     "typescript": "^5.5.0",
     "vitest": "~3.2.0",
     "wrangler": "^4.0.0"
