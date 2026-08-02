@@ -48,6 +48,22 @@ export async function replaceReferrerSnapshot(
   await db.batch(stmts);
 }
 
+// All rows from the repo's most-recently-captured snapshot date, ordered by
+// count desc. Returns [] when the repo has no referrer_snapshot rows at all
+// (the MAX(captured_date) subquery is NULL, so the outer equality matches
+// nothing — no special-casing needed).
+export async function getLatestReferrers(db: D1Database, repo: string): Promise<ReferrerRow[]> {
+  const res = await db
+    .prepare(
+      `SELECT referrer, count, uniques FROM referrer_snapshot
+       WHERE repo=?1 AND captured_date = (SELECT MAX(captured_date) FROM referrer_snapshot WHERE repo=?1)
+       ORDER BY count DESC`
+    )
+    .bind(repo)
+    .all<ReferrerRow>();
+  return res.results;
+}
+
 export async function insertPost(db: D1Database, post: Post): Promise<number> {
   const res = await db
     .prepare(
@@ -108,6 +124,40 @@ export async function upsertSiteDaily(db: D1Database, rows: SiteDaily[]): Promis
   await db.batch(rows.map(r => stmt.bind(r.site, r.date, r.pageviews, r.visitors)));
 }
 
+// audit_results only ever holds the latest run's row per (project, check_id) —
+// upsertAuditResults overwrites in place — so this is inherently "current state",
+// not history. Ordered priority asc then check_id asc for a stable, deterministic
+// listing (matches the priority-first ordering used elsewhere, e.g. getTopOpenTodos).
+export async function listAuditResults(
+  db: D1Database,
+  project: string
+): Promise<(CheckResult & { checkedAt: string })[]> {
+  const res = await db
+    .prepare(
+      `SELECT check_id AS checkId, status, detail, priority, checked_at AS checkedAt
+       FROM audit_results WHERE project=?1 ORDER BY priority ASC, check_id ASC`
+    )
+    .bind(project)
+    .all<CheckResult & { checkedAt: string }>();
+  return res.results;
+}
+
+// Sum of pageviews over the most recent `days` *recorded* dates (same "most
+// recent N rows, not trailing N calendar days" semantics as getRepoSeries —
+// see its comment). COALESCE guards the empty-table case: SUM() over zero
+// rows is NULL, not 0.
+export async function getSitePvSum(db: D1Database, days: number): Promise<number> {
+  const row = await db
+    .prepare(
+      `SELECT COALESCE(SUM(pageviews), 0) AS total FROM site_daily WHERE date IN (
+         SELECT DISTINCT date FROM site_daily ORDER BY date DESC LIMIT ?1
+       )`
+    )
+    .bind(days)
+    .first<{ total: number }>();
+  return row?.total ?? 0;
+}
+
 export async function upsertAuditResults(
   db: D1Database,
   project: string,
@@ -152,6 +202,20 @@ export async function listTodos(db: D1Database, status?: "open" | "done"): Promi
     : `SELECT id, project, source, title, priority, status FROM todos ORDER BY id`;
   const stmt = status ? db.prepare(sql).bind(status) : db.prepare(sql);
   const res = await stmt.all<Todo>();
+  return res.results;
+}
+
+// Top N open todos ordered priority asc then created_at asc (oldest first
+// within a priority tier) — the ordering `listTodos` doesn't provide since
+// `Todo` carries no createdAt field for callers to sort by themselves.
+export async function getTopOpenTodos(db: D1Database, limit: number): Promise<Todo[]> {
+  const res = await db
+    .prepare(
+      `SELECT id, project, source, title, priority, status FROM todos
+       WHERE status='open' ORDER BY priority ASC, created_at ASC LIMIT ?1`
+    )
+    .bind(limit)
+    .all<Todo>();
   return res.results;
 }
 
