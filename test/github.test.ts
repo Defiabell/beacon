@@ -18,10 +18,27 @@ describe("fetchRepoTraffic", () => {
   it("merges views+clones by date and attaches stars/forks", async () => {
     const t = await fetchRepoTraffic("tok", "Defiabell/shotsync", stub);
     const d = t.daily.find(r => r.date === "2026-08-01")!;
-    expect(d.views).toBe(views.views.find((v: { timestamp: string }) => v.timestamp.startsWith("2026-08-01"))!.count);
-    expect(d.clones).toBeGreaterThanOrEqual(0);
+    const viewDay = views.views.find((v: { timestamp: string }) => v.timestamp.startsWith("2026-08-01"))!;
+    const cloneDay = clones.clones.find((c: { timestamp: string }) => c.timestamp.startsWith("2026-08-01"))!;
+    expect(d.views).toBe(viewDay.count);
+    expect(d.uniqueViews).toBe(viewDay.uniques);
+    expect(d.clones).toBe(cloneDay.count);
+    expect(d.uniqueClones).toBe(cloneDay.uniques);
     expect(d.stars).toBe(repoMeta.stargazers_count);
+    expect(d.forks).toBe(repoMeta.forks_count);
     expect(t.referrers.length).toBe(referrers.length);
+  });
+  it("fills the non-overlapping metric with 0 on a views-only date, still attaching stars/forks", async () => {
+    const t = await fetchRepoTraffic("tok", "Defiabell/shotsync", stub);
+    const d = t.daily.find(r => r.date === "2026-07-30")!;
+    const viewDay = views.views.find((v: { timestamp: string }) => v.timestamp.startsWith("2026-07-30"))!;
+    expect(clones.clones.some((c: { timestamp: string }) => c.timestamp.startsWith("2026-07-30"))).toBe(false);
+    expect(d.views).toBe(viewDay.count);
+    expect(d.uniqueViews).toBe(viewDay.uniques);
+    expect(d.clones).toBe(0);
+    expect(d.uniqueClones).toBe(0);
+    expect(d.stars).toBe(repoMeta.stargazers_count);
+    expect(d.forks).toBe(repoMeta.forks_count);
   });
   it("throws on non-2xx", async () => {
     const bad: typeof fetch = async () => new Response("nope", { status: 403 });
