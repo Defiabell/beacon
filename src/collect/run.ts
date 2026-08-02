@@ -39,21 +39,29 @@ async function runSource(db: D1Database, source: string, fn: () => Promise<Sourc
 }
 
 async function collectGithub(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {
+  const failures: string[] = [];
   for (const project of CONFIG.projects) {
-    const traffic = await fetchRepoTraffic(env.GITHUB_TOKEN, project.repo, fetchFn);
-    await upsertRepoDaily(env.DB, traffic.daily);
-    await replaceReferrerSnapshot(env.DB, project.repo, date, traffic.referrers);
-    // Every row in `traffic.daily` carries the same (current) stargazers_count,
-    // fetched once from the repo-meta call inside fetchRepoTraffic — so any
-    // element gives us "today's" star tally. When there's no traffic data at
-    // all (no views/clones in the response window), there's nothing to read
-    // the count off of, so we simply skip the star_history write for this repo.
-    const starsToday = traffic.daily.length > 0 ? traffic.daily[traffic.daily.length - 1].stars : undefined;
-    if (starsToday !== undefined) {
-      await upsertStarHistory(env.DB, project.repo, [{ date, stars: starsToday }]);
+    try {
+      const traffic = await fetchRepoTraffic(env.GITHUB_TOKEN, project.repo, fetchFn);
+      await upsertRepoDaily(env.DB, traffic.daily);
+      await replaceReferrerSnapshot(env.DB, project.repo, date, traffic.referrers);
+      // Every row in `traffic.daily` carries the same (current) stargazers_count,
+      // fetched once from the repo-meta call inside fetchRepoTraffic — so any
+      // element gives us "today's" star tally. When there's no traffic data at
+      // all (no views/clones in the response window), there's nothing to read
+      // the count off of, so we simply skip the star_history write for this repo.
+      // (Empirically GitHub zero-fills the 14-day traffic window, so this is
+      // defensive rather than an expected path on a successful call.)
+      const starsToday = traffic.daily.length > 0 ? traffic.daily[traffic.daily.length - 1].stars : undefined;
+      if (starsToday !== undefined) {
+        await upsertStarHistory(env.DB, project.repo, [{ date, stars: starsToday }]);
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      failures.push(`${project.repo}: ${msg}`);
     }
   }
-  return { ok: true };
+  return failures.length > 0 ? { ok: false, error: failures.join("; ") } : { ok: true };
 }
 
 async function collectPosts(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {

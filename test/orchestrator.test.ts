@@ -90,4 +90,39 @@ describe("runDailyCollect", () => {
     expect(postsRun.ok).toBe(false);
     expect(postsRun.error).toContain(FAILING_POST_URL);
   });
+
+  it("isolates a single repo failure in the github source, still writing the others", async () => {
+    const failingRepo = CONFIG.projects[1].repo; // day-monitor
+    const stubWithOneBadRepo: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes(`/repos/${failingRepo}/traffic/views`)) return new Response("boom", { status: 500 });
+      if (url.endsWith("/traffic/views")) return Response.json(views);
+      if (url.endsWith("/traffic/clones")) return Response.json(clones);
+      if (url.endsWith("/traffic/popular/referrers")) return Response.json(referrers);
+      if (url.includes("/repos/")) return Response.json(repoMeta);
+      return new Response("not found", { status: 404 });
+    };
+
+    const reports = await runDailyCollect(env, new Date("2026-08-01T00:00:00Z"), stubWithOneBadRepo);
+
+    const github = reports.find(r => r.source === "github")!;
+    expect(github.ok).toBe(false);
+    expect(github.error).toContain(failingRepo);
+
+    // the failing repo has no repo_daily row for today...
+    const failingSeries = await db.getRepoSeries(env.DB, failingRepo, 30);
+    expect(failingSeries.find(r => r.date === "2026-08-01")).toBeUndefined();
+
+    // ...but every other configured repo still landed its row (per-repo isolation)
+    for (const project of CONFIG.projects) {
+      if (project.repo === failingRepo) continue;
+      const series = await db.getRepoSeries(env.DB, project.repo, 30);
+      expect(series.find(r => r.date === "2026-08-01")).toBeDefined();
+    }
+
+    const sourceRuns = await db.listSourceRuns(env.DB);
+    const githubRun = sourceRuns.find(r => r.source === "github")!;
+    expect(githubRun.ok).toBe(false);
+    expect(githubRun.error).toContain(failingRepo);
+  });
 });
