@@ -1,0 +1,9 @@
+{
+  "total": 66,
+  "total_events": 0,
+  "stats": [
+    { "day": "2026-07-30", "daily": 12, "daily_unique": 8 },
+    { "day": "2026-07-31", "daily": 20, "daily_unique": 15 },
+    { "day": "2026-08-01", "daily": 34 }
+  ]
+}
