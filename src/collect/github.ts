@@ -18,6 +18,41 @@ async function ghJson<T>(token: string, path: string, fetchFn: FetchFn, accept?:
   return res.json();
 }
 
+function hasNextLink(linkHeader: string | null): boolean {
+  if (!linkHeader) return false;
+  return linkHeader.split(",").some(part => /rel="next"/.test(part));
+}
+
+// GitHub caps this endpoint around 40,000 stargazers (400 pages at per_page=100);
+// this bound is a defensive backstop against a malformed/self-referential Link
+// header driving an infinite pagination loop, not an expected real limit.
+const MAX_STARGAZER_PAGES = 500;
+
+export async function backfillStarHistory(token: string, repo: string, fetchFn: FetchFn = fetch): Promise<{ date: string; stars: number }[]> {
+  const counts = new Map<string, number>();
+  let page = 1;
+  for (;;) {
+    if (page > MAX_STARGAZER_PAGES) throw new Error(`github /repos/${repo}/stargazers -> exceeded ${MAX_STARGAZER_PAGES} pages`);
+    const res = await fetchFn(`https://api.github.com/repos/${repo}/stargazers?per_page=100&page=${page}`, {
+      headers: { ...ghHeaders(token), Accept: "application/vnd.github.star+json" }
+    });
+    if (!res.ok) throw new Error(`github /repos/${repo}/stargazers -> ${res.status}`);
+    const items: { starred_at: string }[] = await res.json();
+    for (const item of items) {
+      const date = item.starred_at.slice(0, 10);
+      counts.set(date, (counts.get(date) ?? 0) + 1);
+    }
+    if (!hasNextLink(res.headers.get("Link"))) break;
+    page++;
+  }
+  const dates = [...counts.keys()].sort((a, b) => a.localeCompare(b));
+  let cumulative = 0;
+  return dates.map(date => {
+    cumulative += counts.get(date)!;
+    return { date, stars: cumulative };
+  });
+}
+
 interface DayStat { timestamp: string; count: number; uniques: number; }
 
 export interface RepoTraffic { daily: RepoDaily[]; referrers: ReferrerRow[]; }
