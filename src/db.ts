@@ -196,10 +196,14 @@ export async function setTodoStatus(
     .run();
 }
 
+// done_at is selected (as doneAt) alongside the rest of the columns already
+// returned here — it's always NULL for "open" rows, and populated for "done"
+// rows by setTodoStatus. Task 12's todos page needs it to show when a done
+// item was completed.
 export async function listTodos(db: D1Database, status?: "open" | "done"): Promise<Todo[]> {
   const sql = status
-    ? `SELECT id, project, source, title, priority, status FROM todos WHERE status=?1 ORDER BY id`
-    : `SELECT id, project, source, title, priority, status FROM todos ORDER BY id`;
+    ? `SELECT id, project, source, title, priority, status, done_at AS doneAt FROM todos WHERE status=?1 ORDER BY id`
+    : `SELECT id, project, source, title, priority, status, done_at AS doneAt FROM todos ORDER BY id`;
   const stmt = status ? db.prepare(sql).bind(status) : db.prepare(sql);
   const res = await stmt.all<Todo>();
   return res.results;

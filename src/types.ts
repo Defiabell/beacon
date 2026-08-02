@@ -12,5 +12,8 @@ export interface Post { id?: number; url: string; platform: Platform; project: s
 export interface PostMetrics { views: number | null; replies: number | null; likes: number | null; score: number | null; }
 export interface SiteDaily { site: string; date: string; pageviews: number; visitors: number; }
 export interface CheckResult { checkId: string; status: "pass" | "fail" | "na"; detail: string; priority: 1 | 2 | 3; }
-export interface Todo { id?: number; project: string; source: "audit" | "matrix" | "manual"; title: string; priority: number; status: "open" | "done"; }
+// doneAt is only ever populated when status is "done" (set by setTodoStatus);
+// optional rather than required because getTopOpenTodos never selects it (its
+// rows are always status="open", so it would always be undefined there).
+export interface Todo { id?: number; project: string; source: "audit" | "matrix" | "manual"; title: string; priority: number; status: "open" | "done"; doneAt?: string | null; }
 export interface SourceRun { source: string; lastRunAt: string; ok: boolean; error: string | null; }

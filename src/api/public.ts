@@ -181,7 +181,10 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
   };
 }
 
-async function buildPostsWithMetrics(env: Env): Promise<PostWithMetrics[]> {
+// Exported (beyond the JSON-route-only usage below) so Task 12's SSR /posts
+// route can reuse the exact same data shape/query pattern instead of
+// duplicating it.
+export async function buildPostsWithMetrics(env: Env): Promise<PostWithMetrics[]> {
   const db = env.DB;
   const posts = await listPosts(db);
   return Promise.all(posts.map(async post => ({ post, latest: await latestPostMetrics(db, post.id!) })));
