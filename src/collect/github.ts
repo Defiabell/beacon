@@ -23,9 +23,9 @@ function hasNextLink(linkHeader: string | null): boolean {
   return linkHeader.split(",").some(part => /rel="next"/.test(part));
 }
 
-// GitHub caps this endpoint around 40,000 stargazers (400 pages at per_page=100);
-// this bound is a defensive backstop against a malformed/self-referential Link
-// header driving an infinite pagination loop, not an expected real limit.
+// No documented GitHub-side page cap for this endpoint; 500 pages (50k stars) is
+// an arbitrary defensive backstop so a malformed/self-referential Link header
+// fails loudly instead of looping forever.
 const MAX_STARGAZER_PAGES = 500;
 
 export async function backfillStarHistory(token: string, repo: string, fetchFn: FetchFn = fetch): Promise<{ date: string; stars: number }[]> {

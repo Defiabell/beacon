@@ -40,6 +40,40 @@ describe("backfillStarHistory", () => {
     expect(seenAccept.length).toBe(2);
   });
 
+  it("handles a multi-relation Link header (next + last, then prev + last with no next) and stops after exactly 2 fetches", async () => {
+    let callCount = 0;
+    const stub: typeof fetch = async input => {
+      callCount++;
+      const url = new URL(String(input));
+      const page = url.searchParams.get("page");
+      if (page === "1") {
+        return new Response(JSON.stringify(page1), {
+          status: 200,
+          headers: {
+            Link: '<https://api.github.com/repos/o/r/stargazers?per_page=100&page=2>; rel="next", <https://api.github.com/repos/o/r/stargazers?per_page=100&page=5>; rel="last"'
+          }
+        });
+      }
+      if (page === "2") {
+        return new Response(JSON.stringify(page2), {
+          status: 200,
+          headers: {
+            Link: '<https://api.github.com/repos/o/r/stargazers?per_page=100&page=1>; rel="prev", <https://api.github.com/repos/o/r/stargazers?per_page=100&page=2>; rel="last"'
+          }
+        });
+      }
+      return new Response("not found", { status: 404 });
+    };
+
+    const result = await backfillStarHistory("tok", "o/r", stub);
+
+    expect(result).toEqual([
+      { date: "2026-07-01", stars: 2 },
+      { date: "2026-07-03", stars: 4 }
+    ]);
+    expect(callCount).toBe(2);
+  });
+
   it("throws on non-2xx", async () => {
     const bad: typeof fetch = async () => new Response("nope", { status: 403 });
     await expect(backfillStarHistory("tok", "o/r", bad)).rejects.toThrow(/403/);
