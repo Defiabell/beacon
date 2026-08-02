@@ -1,0 +1,11 @@
+{
+  "by": "someuser",
+  "descendants": 87,
+  "id": 39912345,
+  "kids": [39912400, 39912410, 39912420],
+  "score": 245,
+  "time": 1753900000,
+  "title": "Show HN: A tiny metrics collector on Cloudflare Workers",
+  "type": "story",
+  "url": "https://example.com/article"
+}

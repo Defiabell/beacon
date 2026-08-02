@@ -1,0 +1,36 @@
+[
+  {
+    "kind": "Listing",
+    "data": {
+      "after": null,
+      "dist": 1,
+      "children": [
+        {
+          "kind": "t3",
+          "data": {
+            "id": "abc123",
+            "title": "Show Reddit: A tiny metrics collector on Cloudflare Workers",
+            "subreddit": "programming",
+            "score": 1024,
+            "ups": 1050,
+            "downs": 26,
+            "num_comments": 213,
+            "permalink": "/r/programming/comments/abc123/example_reddit_post/",
+            "created_utc": 1753900000,
+            "author": "someuser"
+          }
+        }
+      ],
+      "before": null
+    }
+  },
+  {
+    "kind": "Listing",
+    "data": {
+      "after": null,
+      "dist": 0,
+      "children": [],
+      "before": null
+    }
+  }
+]
