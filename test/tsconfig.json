@@ -12,5 +12,5 @@
     ],
     "lib": ["es2022"]
   },
-  "include": ["**/*.test.ts", "apply-migrations.ts"]
+  "include": ["**/*.ts"]
 }
