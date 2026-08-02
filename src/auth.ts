@@ -21,10 +21,17 @@ const BEARER_PREFIX = "Bearer ";
 // it's fine to proceed. The token is only ever read from the Authorization
 // header — never from the URL/query string — so it can't end up in access logs.
 export function requireAdmin(req: Request, env: Env): Response | null {
+  const unauthorized = () => Response.json({ error: "unauthorized" }, { status: 401 });
+  // A Worker deployed before `wrangler secret put ADMIN_TOKEN` has env.ADMIN_TOKEN
+  // as `undefined` at runtime (despite the `Env` type saying `string`). Without
+  // this guard, timingSafeEqual would immediately throw on `undefined.length`,
+  // 500ing every admin request instead of cleanly 401ing them.
+  if (!env.ADMIN_TOKEN) return unauthorized();
+
   const auth = req.headers.get("Authorization") ?? "";
   const token = auth.startsWith(BEARER_PREFIX) ? auth.slice(BEARER_PREFIX.length) : "";
   if (token.length === 0 || !timingSafeEqual(token, env.ADMIN_TOKEN)) {
-    return Response.json({ error: "unauthorized" }, { status: 401 });
+    return unauthorized();
   }
   return null;
 }

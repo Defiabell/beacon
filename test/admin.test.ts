@@ -4,6 +4,7 @@ import { timingSafeEqual } from "../src/auth";
 import { handleAdmin } from "../src/api/admin";
 import { CONFIG } from "../src/config";
 import * as db from "../src/db";
+import type { Env } from "../src/types";
 import v2exFixture from "./fixtures/v2ex-topic.json";
 
 const ADMIN_TOKEN = "test-admin-token"; // bound in vitest.config.ts miniflare bindings
@@ -65,6 +66,15 @@ describe("handleAdmin: auth", () => {
     // Authorization header, never appended as a query param.
     const request = req("POST", "/api/admin/collect");
     expect(request.url).not.toContain(ADMIN_TOKEN);
+  });
+
+  it("401s instead of throwing when env.ADMIN_TOKEN is unset (e.g. secret not yet provisioned)", async () => {
+    // Real Workers env: an unbound secret is `undefined` at runtime despite the
+    // `Env` type saying `string` — deliberately violate that type here to
+    // reproduce it, rather than relying on a request with no token.
+    const envWithoutToken = { ...env, ADMIN_TOKEN: undefined } as unknown as Env;
+    const res = await handleAdmin(req("POST", "/api/admin/collect"), envWithoutToken, "/api/admin/collect");
+    expect(res.status).toBe(401);
   });
 });
 
@@ -142,6 +152,51 @@ describe("POST /api/admin/posts", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("400s with the missing field named when project is omitted", async () => {
+    const res = await handleAdmin(
+      req("POST", "/api/admin/posts", { body: { url: "https://www.v2ex.com/t/1229945" } }),
+      env,
+      "/api/admin/posts",
+      v2exStub
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("project");
+  });
+
+  it("400s with the missing field named when url is omitted", async () => {
+    const res = await handleAdmin(
+      req("POST", "/api/admin/posts", { body: { project: "nightide" } }),
+      env,
+      "/api/admin/posts",
+      v2exStub
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("url");
+  });
+
+  it("still creates the post (deferring metrics) when fetchPostMetrics fails, so the post isn't stranded behind the unique url constraint", async () => {
+    const url = "https://www.v2ex.com/t/999888";
+    const failingFetch: typeof fetch = async () => new Response("boom", { status: 500 });
+    const res = await handleAdmin(
+      req("POST", "/api/admin/posts", { body: { url, project: "nightide" } }),
+      env,
+      "/api/admin/posts",
+      failingFetch
+    );
+    expect(res.status).toBe(201);
+    const body = await res.json<{ id: number; metrics?: string }>();
+    expect(typeof body.id).toBe("number");
+    expect(body.metrics).toBe("deferred");
+
+    const post = await env.DB.prepare("select url from posts where id=?1").bind(body.id).first();
+    expect(post).not.toBeNull();
+
+    const metrics = await env.DB.prepare("select * from post_metrics where post_id=?1").bind(body.id).first();
+    expect(metrics).toBeNull();
+  });
 });
 
 describe("PUT /api/admin/channels", () => {
@@ -192,6 +247,28 @@ describe("PUT /api/admin/channels", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  it("400s with the missing field named when channelId is omitted", async () => {
+    const res = await handleAdmin(
+      req("PUT", "/api/admin/channels", { body: { project: "nightide", status: "planned" } }),
+      env,
+      "/api/admin/channels"
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("channelId");
+  });
+
+  it("400s with the missing field named when project is omitted", async () => {
+    const res = await handleAdmin(
+      req("PUT", "/api/admin/channels", { body: { channelId: "v2ex", status: "planned" } }),
+      env,
+      "/api/admin/channels"
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("project");
+  });
 });
 
 describe("PUT /api/admin/todos", () => {
@@ -235,6 +312,21 @@ describe("PUT /api/admin/todos", () => {
     const res = await handleAdmin(req("PUT", "/api/admin/todos", { body: "not json" }), env, "/api/admin/todos");
     expect(res.status).toBe(400);
   });
+
+  it("400s with the missing field named when id is omitted", async () => {
+    const res = await handleAdmin(req("PUT", "/api/admin/todos", { body: { status: "done" } }), env, "/api/admin/todos");
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("id");
+  });
+
+  it("400s with the missing field named when status is omitted", async () => {
+    const id = await insertTodo("open");
+    const res = await handleAdmin(req("PUT", "/api/admin/todos", { body: { id } }), env, "/api/admin/todos");
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("status");
+  });
 });
 
 describe("POST /api/admin/collect", () => {
@@ -258,10 +350,40 @@ describe("POST /api/admin/backfill", () => {
     };
     const res = await handleAdmin(req("POST", "/api/admin/backfill"), env, "/api/admin/backfill", stub);
     expect(res.status).toBe(200);
-    const body = await res.json<{ repos: number }>();
+    const body = await res.json<{ repos: number; failures: string[] }>();
     expect(body.repos).toBe(CONFIG.projects.length);
+    expect(body.failures).toEqual([]);
 
     for (const project of CONFIG.projects) {
+      const series = await db.getStarSeries(env.DB, project.repo);
+      expect(series).toEqual([{ date: "2026-07-01", stars: 1 }]);
+    }
+  });
+
+  it("isolates a single repo's failure — the rest still backfill, and the response names the failure", async () => {
+    const failingRepo = CONFIG.projects[1].repo; // day-monitor
+    const stub: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes(`/repos/${failingRepo}/stargazers`)) return new Response("boom", { status: 500 });
+      if (url.includes("/stargazers")) {
+        return new Response(JSON.stringify([{ starred_at: "2026-07-01T00:00:00Z" }]), { status: 200 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    const res = await handleAdmin(req("POST", "/api/admin/backfill"), env, "/api/admin/backfill", stub);
+    expect(res.status).toBe(200);
+    const body = await res.json<{ repos: number; failures: string[] }>();
+    expect(body.repos).toBe(CONFIG.projects.length - 1);
+    expect(body.failures.length).toBe(1);
+    expect(body.failures[0]).toContain(failingRepo);
+
+    // the failing repo got no star_history rows...
+    const failingSeries = await db.getStarSeries(env.DB, failingRepo);
+    expect(failingSeries).toEqual([]);
+
+    // ...but every other configured repo still backfilled (per-repo isolation)
+    for (const project of CONFIG.projects) {
+      if (project.repo === failingRepo) continue;
       const series = await db.getStarSeries(env.DB, project.repo);
       expect(series).toEqual([{ date: "2026-07-01", stars: 1 }]);
     }

@@ -37,9 +37,19 @@ interface CreatePostBody {
   title?: string;
 }
 
+function missingField(name: string): Response {
+  return jsonResponse({ error: `missing required field: ${name}` }, 400);
+}
+
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
+
 async function handleCreatePost(req: Request, env: Env, fetchFn: FetchFn): Promise<Response> {
   const body = await parseJsonBody<CreatePostBody>(req);
   if (!body) return jsonResponse({ error: "malformed json body" }, 400);
+  if (!isNonEmptyString(body.url)) return missingField("url");
+  if (!isNonEmptyString(body.project)) return missingField("project");
 
   const platform = detectPlatform(body.url);
   if (!platform) return jsonResponse({ error: `could not detect platform for url: ${body.url}` }, 400);
@@ -52,11 +62,20 @@ async function handleCreatePost(req: Request, env: Env, fetchFn: FetchFn): Promi
     publishedAt: null
   });
 
+  // The post row is committed above; posts.url is UNIQUE, so if the metrics fetch
+  // below fails there is no safe way to let this request fail too — a retry would
+  // just hit the unique constraint and the post would be stranded with no metrics
+  // and no path to get any. Instead we swallow the failure here and report success:
+  // the nightly cron's collectPosts (src/collect/run.ts) iterates every stored post
+  // and will backfill today's metrics on its next run, same as for any other post.
   const today = new Date().toISOString().slice(0, 10);
-  const metrics = await fetchPostMetrics(body.url, platform, fetchFn);
-  await upsertPostMetrics(env.DB, id, today, metrics);
-
-  return jsonResponse({ id }, 201);
+  try {
+    const metrics = await fetchPostMetrics(body.url, platform, fetchFn);
+    await upsertPostMetrics(env.DB, id, today, metrics);
+    return jsonResponse({ id }, 201);
+  } catch {
+    return jsonResponse({ id, metrics: "deferred" }, 201);
+  }
 }
 
 interface PutChannelBody {
@@ -69,6 +88,9 @@ interface PutChannelBody {
 async function handlePutChannel(req: Request, env: Env): Promise<Response> {
   const body = await parseJsonBody<PutChannelBody>(req);
   if (!body) return jsonResponse({ error: "malformed json body" }, 400);
+  if (!isNonEmptyString(body.project)) return missingField("project");
+  if (!isNonEmptyString(body.channelId)) return missingField("channelId");
+  if (!isNonEmptyString(body.status)) return missingField("status");
 
   await upsertProjectChannel(env.DB, body.project, body.channelId, body.status, body.postId ?? null);
   return noContent();
@@ -82,6 +104,8 @@ interface PutTodoBody {
 async function handlePutTodo(req: Request, env: Env): Promise<Response> {
   const body = await parseJsonBody<PutTodoBody>(req);
   if (!body) return jsonResponse({ error: "malformed json body" }, 400);
+  if (typeof body.id !== "number") return missingField("id");
+  if (!isNonEmptyString(body.status)) return missingField("status");
 
   const doneAt = body.status === "done" ? new Date().toISOString() : null;
   await setTodoStatus(env.DB, body.id, body.status, doneAt);
@@ -93,12 +117,23 @@ async function handleCollect(env: Env, fetchFn: FetchFn): Promise<Response> {
   return jsonResponse(reports, 200);
 }
 
+// Per-repo isolation mirrors collectGithub (src/collect/run.ts): one repo's
+// stargazers fetch failing (rate limit, transient 5xx, etc.) shouldn't stop the
+// rest of the fleet from backfilling.
 async function handleBackfill(env: Env, fetchFn: FetchFn): Promise<Response> {
+  let succeeded = 0;
+  const failures: string[] = [];
   for (const project of CONFIG.projects) {
-    const rows = await backfillStarHistory(env.GITHUB_TOKEN, project.repo, fetchFn);
-    await upsertStarHistory(env.DB, project.repo, rows);
+    try {
+      const rows = await backfillStarHistory(env.GITHUB_TOKEN, project.repo, fetchFn);
+      await upsertStarHistory(env.DB, project.repo, rows);
+      succeeded++;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      failures.push(`${project.repo}: ${msg}`);
+    }
   }
-  return jsonResponse({ repos: CONFIG.projects.length }, 200);
+  return jsonResponse({ repos: succeeded, failures }, 200);
 }
 
 // `path` is the request's URL.pathname as seen by the caller (Task 12's router),
