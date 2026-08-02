@@ -161,16 +161,23 @@ describe("todoTitle", () => {
     expect(todoTitle("readme-english-intro", input)).toBe(`在 ${input.project} README 首屏加英文一句话简介`);
     expect(todoTitle("readme-visual", input)).toBe(`给 ${input.project} README 加截图或 GIF`);
     expect(todoTitle("release-assets", input)).toBe(`把 ${input.project} 预编译产物挂到 GitHub Releases`);
+    expect(todoTitle("readme-links", input)).toBe(`修复 ${input.project} README 断链`);
     expect(todoTitle("social-preview", input)).toBe(`给 ${input.project} 设置 social preview 图`);
     expect(todoTitle("homepage", input)).toBe(`给 ${input.project} 填 homepage 字段`);
   });
 
-  it("readme-links interpolates the broken link list", () => {
-    const input = golden();
-    input.brokenLinks = ["https://example.com/a", "https://example.com/b"];
-    expect(todoTitle("readme-links", input)).toBe(
-      `修复 ${input.project} README 断链：https://example.com/a, https://example.com/b`
-    );
+  it("readme-links title is STABLE — it does not interpolate the broken-link list, so two different broken-link sets render the identical title", () => {
+    const withOneLink = golden();
+    withOneLink.brokenLinks = ["https://example.com/a"];
+    const withTwoLinks = golden();
+    withTwoLinks.brokenLinks = ["https://example.com/b", "https://example.com/c"];
+    const withNoLinks = golden();
+    withNoLinks.brokenLinks = [];
+
+    const title = `修复 ${withOneLink.project} README 断链`;
+    expect(todoTitle("readme-links", withOneLink)).toBe(title);
+    expect(todoTitle("readme-links", withTwoLinks)).toBe(title);
+    expect(todoTitle("readme-links", withNoLinks)).toBe(title);
   });
 });
 
@@ -227,10 +234,14 @@ describe("collectAuditInput", () => {
 
   it("does not skip a github.com lookalike domain from the broken-link check", async () => {
     const base = buildStub();
+    // A minimal README with just the lookalike link — not readmeFixture's full
+    // link stack (raw.githubusercontent screenshot + docs + broken-page) plus
+    // this one, which would overflow MAX_LINKS_CHECKED=3 and silently drop the
+    // lookalike link from the check before it's ever reached.
     const withLookalike: typeof fetch = async (input, init) => {
       const url = String(input);
       if (url.endsWith("/readme")) {
-        return new Response(`${readmeFixture}\n- Lookalike: https://evilgithub.com/whatever\n`, { status: 200 });
+        return new Response("# shotsync\n\n- Lookalike: https://evilgithub.com/whatever\n", { status: 200 });
       }
       if (url === "https://evilgithub.com/whatever") return new Response("nope", { status: 404 });
       return base(input, init);
@@ -239,10 +250,11 @@ describe("collectAuditInput", () => {
     expect(input.brokenLinks).toContain("https://evilgithub.com/whatever");
   });
 
-  it("checks a link past the raw 20th position when github.com self-references occupy the earlier positions", async () => {
+  it("checks a link past the raw MAX_LINKS_CHECKED position when github.com self-references occupy the earlier positions", async () => {
     // 22 distinct github.com links (badges/Actions/Issues-style self-references)
     // followed by one external broken link. In raw match order the external
-    // link sits at position 23 — past the 20-link budget. The github.com
+    // link sits at position 23 — way past the (deliberately small,
+    // subrequest-budget-driven) MAX_LINKS_CHECKED=3 link budget. The github.com
     // exemption must be applied BEFORE the budget truncation, or these
     // self-references silently consume the whole budget and the real external
     // link never gets checked at all.
@@ -289,18 +301,23 @@ describe("runAudit", () => {
     await runAudit(env, buildStub());
 
     const rows = await env.DB.prepare(
-      "select check_id as checkId, status from audit_results where project=?1"
+      "select check_id as checkId, status, detail from audit_results where project=?1"
     )
       .bind("shotsync")
-      .all<{ checkId: string; status: string }>();
-    const shotsyncChecks = Object.fromEntries(rows.results.map(r => [r.checkId, r.status]));
-    expect(shotsyncChecks.topics).toBe("fail");
-    expect(shotsyncChecks["readme-links"]).toBe("fail");
+      .all<{ checkId: string; status: string; detail: string }>();
+    const shotsyncChecks = Object.fromEntries(rows.results.map(r => [r.checkId, r]));
+    expect(shotsyncChecks.topics.status).toBe("fail");
+    expect(shotsyncChecks["readme-links"].status).toBe("fail");
+    // the broken-link list lives in detail (rendered on the project page), not the todo title
+    expect(shotsyncChecks["readme-links"].detail).toContain("broken-page");
 
     const todos = await db.listTodos(env.DB, "open");
     const shotsyncTodos = todos.filter(t => t.project === "shotsync");
     expect(shotsyncTodos.some(t => t.title.includes("topics"))).toBe(true);
-    expect(shotsyncTodos.some(t => t.title.includes("断链") && t.title.includes("broken-page"))).toBe(true);
+    const readmeLinksTodo = shotsyncTodos.find(t => t.title.includes("断链"));
+    expect(readmeLinksTodo).toBeDefined();
+    expect(readmeLinksTodo!.title).toBe("修复 shotsync README 断链");
+    expect(readmeLinksTodo!.title).not.toContain("broken-page");
 
     // every configured project got a full set of audit_results rows (isolation smoke check)
     for (const project of CONFIG.projects) {
@@ -320,6 +337,80 @@ describe("runAudit", () => {
     await runAudit(env, stub);
     const secondCount = (await db.listTodos(env.DB)).filter(t => t.project === "shotsync").length;
     expect(secondCount).toBe(firstCount);
+  });
+
+  // I2: transient-failure lifecycle. buildStub()'s shotsync README carries a
+  // broken link (https://example.com/broken-page -> 404), which fails the
+  // readme-links check and opens a todo. A later run where that same link now
+  // resolves should auto-close the todo (closeTodoByTitle in src/audit/run.ts)
+  // rather than leaving it open forever or creating a second, parallel one.
+  it("auto-closes the readme-links todo once the broken link is fixed on a later run, without leaving a stray duplicate", async () => {
+    const brokenStub = buildStub();
+    await runAudit(env, brokenStub);
+
+    const openAfterFirstRun = (await db.listTodos(env.DB, "open")).filter(
+      t => t.project === "shotsync" && t.title.includes("断链")
+    );
+    expect(openAfterFirstRun).toHaveLength(1);
+
+    const fixedStub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "https://example.com/broken-page") return new Response("ok", { status: 200 });
+      return brokenStub(input, init);
+    };
+    await runAudit(env, fixedStub);
+
+    const allShotsyncReadmeLinksTodos = (await db.listTodos(env.DB)).filter(
+      t => t.project === "shotsync" && t.title.includes("断链")
+    );
+    // exactly one row total — closed in place, not superseded by a new one
+    expect(allShotsyncReadmeLinksTodos).toHaveLength(1);
+    expect(allShotsyncReadmeLinksTodos[0].status).toBe("done");
+    expect(allShotsyncReadmeLinksTodos[0].doneAt).not.toBeNull();
+
+    const stillOpen = (await db.listTodos(env.DB, "open")).filter(
+      t => t.project === "shotsync" && t.title.includes("断链")
+    );
+    expect(stillOpen).toHaveLength(0);
+  });
+
+  // I2: title stability. Two runs whose README fails readme-links for two
+  // DIFFERENT broken links must still collapse onto the same todo row (title
+  // no longer embeds the link list — see todoTitle in src/audit/checks.ts) —
+  // not proliferate into one todo per distinct broken-link set. Uses a
+  // purpose-built minimal README (rather than reusing readmeFixture, which
+  // already carries its own https://example.com/broken-page inside the
+  // MAX_LINKS_CHECKED=3 budget — appending a link after it would silently
+  // never be checked at all) with exactly one external, non-github.com link.
+  it("title stability: two runs with different broken-link sets still produce exactly one open todo, not two", async () => {
+    const base = buildStub();
+    const readmeWithBrokenLink = (url: string) =>
+      `# shotsync\n\nA cross-device clipboard and image relay pool for quick sharing across devices.\n\n` +
+      `![screenshot](https://github.com/Defiabell/shotsync/blob/main/screenshot.png)\n\n- Broken: ${url}\n`;
+
+    const firstBroken = "https://example.com/broken-page-a";
+    const stub1: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readmeWithBrokenLink(firstBroken), { status: 200 });
+      if (url === firstBroken) return new Response("nope", { status: 404 });
+      return base(input, init);
+    };
+    await runAudit(env, stub1);
+
+    const secondBroken = "https://example.com/broken-page-b";
+    const stub2: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readmeWithBrokenLink(secondBroken), { status: 200 });
+      if (url === secondBroken) return new Response("nope", { status: 404 });
+      return base(input, init);
+    };
+    await runAudit(env, stub2);
+
+    const openTodos = (await db.listTodos(env.DB, "open")).filter(
+      t => t.project === "shotsync" && t.title.includes("断链")
+    );
+    expect(openTodos).toHaveLength(1);
+    expect(openTodos[0].title).toBe("修复 shotsync README 断链");
   });
 
   it("isolates a single project's collect failure, still auditing the others, and throws an aggregated error", async () => {

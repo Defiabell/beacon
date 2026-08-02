@@ -323,9 +323,9 @@ export function renderTodos(todos: Todo[]): string {
 <p class="lead">体检 fail 项与矩阵建议自动生成；完成后与流量曲线叠加，看行动带来的变化。</p>
 <div class="filters"><button class="on">进行中 ${open.length}</button><button>已完成 ${done.length}</button></div>
 <p class="sec-cap">进行中</p>
-<section><ul>${open.map(renderOpenTodoItem).join("") || `<li>暂无进行中待办</li>`}</ul></section>
+<section><ul class="plain">${open.map(renderOpenTodoItem).join("") || `<li>暂无进行中待办</li>`}</ul></section>
 <p class="sec-cap">已完成</p>
-<section><ul>${done.map(renderDoneTodoItem).join("") || `<li>暂无已完成待办</li>`}</ul></section>
+<section><ul class="plain">${done.map(renderDoneTodoItem).join("") || `<li>暂无已完成待办</li>`}</ul></section>
 </main>`;
   return page("beacon · 待办", body);
 }

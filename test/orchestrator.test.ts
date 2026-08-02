@@ -135,4 +135,38 @@ describe("runDailyCollect", () => {
     expect(githubRun.ok).toBe(false);
     expect(githubRun.error).toContain(failingRepo);
   });
+
+  // C1: the daily cron is split across two invocations (wrangler.toml's two
+  // crons + src/index.ts's event.cron routing) to stay under the free tier's
+  // 50-subrequests-per-invocation cap. This exercises the `sources` filter
+  // that split relies on.
+  it("with a `sources` filter, only runs and records those sources — the rest are neither invoked nor written to source_runs", async () => {
+    const reports = await runDailyCollect(env, new Date("2026-08-01T00:00:00Z"), stub, ["audit"]);
+
+    expect(reports.map(r => r.source)).toEqual(["audit"]);
+    const audit = reports[0];
+    expect(audit.ok).toBe(true);
+
+    const sourceRuns = await db.listSourceRuns(env.DB);
+    expect(sourceRuns.map(r => r.source)).toEqual(["audit"]);
+
+    // github never ran: no repo_daily rows landed for any configured project
+    for (const project of CONFIG.projects) {
+      const series = await db.getRepoSeries(env.DB, project.repo, 30);
+      expect(series).toEqual([]);
+    }
+  });
+
+  it("with a multi-name `sources` filter (github, posts), runs exactly those two and skips goatcounter/audit", async () => {
+    const reports = await runDailyCollect(env, new Date("2026-08-01T00:00:00Z"), stub, ["github", "posts"]);
+
+    expect(reports.map(r => r.source).sort()).toEqual(["github", "posts"]);
+
+    const sourceRuns = await db.listSourceRuns(env.DB);
+    expect(sourceRuns.map(r => r.source).sort()).toEqual(["github", "posts"]);
+
+    // audit never ran: no audit_results rows landed
+    const auditCount = await env.DB.prepare("select count(*) as n from audit_results").first<{ n: number }>();
+    expect(auditCount!.n).toBe(0);
+  });
 });

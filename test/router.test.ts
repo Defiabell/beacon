@@ -19,6 +19,16 @@ function req(
   return new Request(`https://beacon.internal${path}`, init);
 }
 
+// I1: every cacheable 200 GET response now also gets `ctx.waitUntil(caches.default.put(request,
+// response.clone()))` (src/index.ts). `.clone()` tees the response body; in this local
+// Miniflare/workerd test runtime, if NEITHER tee branch is ever read, the cache-storage
+// write's pending read() never resolves, the outstanding waitUntil never settles, and the
+// test hangs forever (the test runner awaits outstanding waitUntil tasks before a request is
+// considered done). In real production this isn't an issue — the platform itself always
+// drains the returned response to send it to the client, which is what completes the tee on
+// the other side — but a test that only asserts on status/headers must still explicitly read
+// the body (even if it discards the result) to avoid this test-harness-only deadlock. Every
+// `it()` below that expects a 200 from a cacheable GET does so.
 describe("SSR pages", () => {
   it("GET / returns 200 text/html with the SSR cache headers and the overview marker", async () => {
     const res = await SELF.fetch(req("GET", "/"));
@@ -60,12 +70,50 @@ describe("SSR pages", () => {
     const res = await SELF.fetch(req("GET", "/todos"));
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    await res.text(); // drain the body — see the file-level comment on the cache-put tee
   });
 
   it("GET /posts -> 200 text/html", async () => {
     const res = await SELF.fetch(req("GET", "/posts"));
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("text/html; charset=utf-8");
+    await res.text(); // drain the body — see the file-level comment on the cache-put tee
+  });
+});
+
+describe("edge cache (Cache API)", () => {
+  // I1: on workers.dev the Cache API is inert (every request re-runs the
+  // handler), but the code path must still execute without error and return
+  // the right content either way — this is what's actually observable from a
+  // test running against the local Miniflare/workerd runtime.
+  it("a cacheable GET path (/matrix) returns the correct 200 HTML body across repeated requests", async () => {
+    const first = await SELF.fetch(req("GET", "/matrix"));
+    const second = await SELF.fetch(req("GET", "/matrix"));
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const firstText = await first.text();
+    const secondText = await second.text();
+    expect(firstText).toBe(secondText);
+    expect(secondText).toContain("渠道");
+  });
+
+  // Non-GET and /api/admin/* must bypass the cache branch entirely (never
+  // read from or written to caches.default) — since neither ever produces a
+  // legitimate 200 (POST/PUT-only, auth-gated), the honest thing to assert is
+  // that the request is still evaluated fresh every time, not crashed or
+  // silently short-circuited by the cache code path.
+  it("a non-GET admin request (POST /api/admin/collect, unauthorized) bypasses the cache code path without error, on every repeated call", async () => {
+    const first = await SELF.fetch(req("POST", "/api/admin/collect"));
+    const second = await SELF.fetch(req("POST", "/api/admin/collect"));
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(401);
+  });
+
+  it("a GET on the /api/admin/* prefix bypasses the cache code path without error, on every repeated call", async () => {
+    const first = await SELF.fetch(req("GET", "/api/admin/whatever"));
+    const second = await SELF.fetch(req("GET", "/api/admin/whatever"));
+    expect(first.status).toBe(401);
+    expect(second.status).toBe(401);
   });
 });
 
@@ -74,6 +122,7 @@ describe("API passthrough", () => {
     const res = await SELF.fetch(req("GET", "/api/overview"));
     expect(res.status).toBe(200);
     expect(res.headers.get("Content-Type")).toBe("application/json; charset=utf-8");
+    await res.text(); // drain the body — see the file-level comment on the cache-put tee
   });
 
   it("POST /api/admin/collect with no token -> 401 (handleAdmin)", async () => {

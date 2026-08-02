@@ -15,7 +15,7 @@ beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织
 - **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 9 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 
-整个系统跑在一个 Worker 里：一个公开、无需鉴权的 SSR dashboard（`/`、`/p/:project`、`/matrix`、`/todos`、`/posts`），加一个用 Bearer token 保护的写入用 admin API（`/api/admin/*`）。
+整个系统跑在一个 Worker 里：一个公开、无需鉴权的 SSR dashboard（`/`、`/p/:project`、`/matrix`、`/todos`、`/posts`），加一个用 Bearer token 保护的写入用 admin API（`/api/admin/*`）。除 `/api/admin/*` 外，所有 GET 响应都会经过 Workers Cache API——在自定义域名下（非裸 `workers.dev` 子域）会带来真正的边缘缓存，叠加在 `max-age=60` 的浏览器缓存之上。
 
 ## 自己部署（约 5 分钟）
 
@@ -64,9 +64,15 @@ npm run deploy
 curl -X POST https://beacon.<你的子域>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 
-# 立即跑一次今天的 github/posts/goatcounter/audit 采集
-# （从明天起每日定时任务会自动做同样的事）
-curl -X POST https://beacon.<你的子域>.workers.dev/api/admin/collect \
+# 立即跑一次今天的采集（从明天起每日定时任务会自动做同样的事，且拆成两次触发——见下文）。
+# 不带 ?sources= 的单次调用会在一次 invocation 里跑完全部四个采集器
+# （github/posts/goatcounter/audit），在多仓库的情况下这已经接近 Workers
+# 免费档「每次 invocation 最多 50 个 subrequest」的上限。下面两步式调用
+# 才是手动触发的安全做法——和定时任务本身的拆分（wrangler.toml 的两条
+# cron + src/index.ts）一致：
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=github,posts,goatcounter" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=audit" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
@@ -95,11 +101,13 @@ npx wrangler secret put GOATCOUNTER_TOKEN   # GoatCounter → Settings → API �
 curl -X POST https://beacon.<子域>.workers.dev/api/admin/posts \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://news.ycombinator.com/item?id=12345678", "project": "shotsync", "title": "Show HN: shotsync"}'
+  -d '{"url": "https://news.ycombinator.com/item?id=12345678", "project": "shotsync", "title": "Show HN: shotsync", "publishedAt": "2026-07-15T09:00:00Z"}'
 # -> 201 {"id": 7}
 # 如果这次平台指标 API 恰好失败：
 # -> 201 {"id": 7, "metrics": "deferred"}
 ```
+
+`publishedAt` 是可选字段（ISO 8601 字符串）——不传就和之前一样，帖子不带发布日期存下来。
 
 **把某个渠道标记为已发布 / 计划中 / 不适用：**
 
@@ -124,9 +132,17 @@ curl -X PUT https://beacon.<子域>.workers.dev/api/admin/todos \
 **手动触发一次采集或回填**（和上面部署步骤里用的是同一组路由）：
 
 ```bash
+# 一次调用跑完全部四个采集器——多仓库场景下已接近免费档 subrequest 上限
+# （更安全的两步式调用见上面的部署步骤）
 curl -X POST https://beacon.<子域>.workers.dev/api/admin/collect \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 # -> 200 [{"source":"github","ok":true}, {"source":"posts","ok":true}, ...]
+
+# ?sources=<逗号分隔的名字> 把这次采集限定到 github/posts/goatcounter/audit
+# 的子集；传了未知名字会 400
+curl -X POST "https://beacon.<子域>.workers.dev/api/admin/collect?sources=audit" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# -> 200 [{"source":"audit","ok":true}]
 
 curl -X POST https://beacon.<子域>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer $ADMIN_TOKEN"

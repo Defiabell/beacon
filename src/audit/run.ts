@@ -3,12 +3,19 @@ import type { ProjectConfig } from "../config";
 import type { FetchFn } from "../collect/github";
 import { ghHeaders } from "../collect/github";
 import { CONFIG } from "../config";
-import { upsertAuditResults, insertTodoIfNew } from "../db";
+import { upsertAuditResults, insertTodoIfNew, closeTodoByTitle } from "../db";
 import type { RepoAuditInput } from "./checks";
 import { runRepoChecks, todoTitle } from "./checks";
 
 const USER_AGENT = "beacon (+https://github.com/Defiabell/beacon)";
-const MAX_LINKS_CHECKED = 20;
+// Per-repo external-link check budget. Chosen so a full audit run of 4 repos
+// worst-cases at 4 base fetches + 3 links x2 (HEAD, then a GET fallback on
+// 403/405) per repo = 4x(4+3x2) = 40 subrequests — comfortably under the
+// Workers free tier's 50-subrequests-per-invocation cap. See wrangler.toml /
+// src/collect/run.ts for how the daily cron is split across two invocations
+// so this budget doesn't also have to share headroom with github/posts/
+// goatcounter in the same invocation.
+const MAX_LINKS_CHECKED = 3;
 const SOCIAL_PREVIEW_URL = (repo: string) => `https://github.com/${repo}`;
 
 interface RepoMeta {
@@ -164,14 +171,25 @@ export async function runAudit(env: Env, fetchFn: FetchFn = fetch): Promise<void
       const results = runRepoChecks(input);
       await upsertAuditResults(env.DB, project.name, results, checkedAt);
       for (const result of results) {
-        if (result.status !== "fail") continue;
-        await insertTodoIfNew(env.DB, {
-          project: project.name,
-          source: "audit",
-          title: todoTitle(result.checkId, input),
-          priority: result.priority,
-          status: "open"
-        });
+        const title = todoTitle(result.checkId, input);
+        if (result.status === "fail") {
+          await insertTodoIfNew(env.DB, {
+            project: project.name,
+            source: "audit",
+            title,
+            priority: result.priority,
+            status: "open"
+          });
+        } else if (result.status === "pass") {
+          // The check that generated this todo (if any) now passes — close it.
+          // Safe to call unconditionally: it's a no-op UPDATE when no open todo
+          // with this exact title exists. Relies on todoTitle being STABLE per
+          // (project, checkId) regardless of check-specific detail (e.g.
+          // readme-links no longer embeds the broken-link list in the title) —
+          // otherwise this title wouldn't match the row insertTodoIfNew created
+          // on an earlier failing run with a different detail.
+          await closeTodoByTitle(env.DB, project.name, "audit", title, checkedAt);
+        }
       }
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);

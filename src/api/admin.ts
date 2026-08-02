@@ -2,7 +2,8 @@ import type { Env } from "../types";
 import type { FetchFn } from "../collect/github";
 import { backfillStarHistory } from "../collect/github";
 import { detectPlatform, fetchPostMetrics } from "../collect/posts";
-import { runDailyCollect } from "../collect/run";
+import { runDailyCollect, ALL_SOURCES } from "../collect/run";
+import type { SourceName } from "../collect/run";
 import { CONFIG } from "../config";
 import { requireAdmin } from "../auth";
 import {
@@ -35,6 +36,11 @@ interface CreatePostBody {
   url: string;
   project: string;
   title?: string;
+  // ISO string, caller-supplied — no validation beyond typeof string (see
+  // handleCreatePost); the platform-specific fetchPostMetrics call below
+  // doesn't derive this itself, so there's nothing more authoritative to
+  // check it against.
+  publishedAt?: string;
 }
 
 function missingField(name: string): Response {
@@ -59,7 +65,7 @@ async function handleCreatePost(req: Request, env: Env, fetchFn: FetchFn): Promi
     platform,
     project: body.project,
     title: body.title ?? "",
-    publishedAt: null
+    publishedAt: typeof body.publishedAt === "string" ? body.publishedAt : null
   });
 
   // The post row is committed above; posts.url is UNIQUE, so if the metrics fetch
@@ -112,8 +118,34 @@ async function handlePutTodo(req: Request, env: Env): Promise<Response> {
   return noContent();
 }
 
-async function handleCollect(env: Env, fetchFn: FetchFn): Promise<Response> {
-  const reports = await runDailyCollect(env, new Date(), fetchFn);
+function isSourceName(s: string): s is SourceName {
+  return (ALL_SOURCES as string[]).includes(s);
+}
+
+// `?sources=github,posts` restricts a manual collect run to a subset — same
+// mechanism the split cron uses (src/collect/run.ts, src/index.ts). Omitted
+// entirely -> all four, matching the pre-existing default behavior; an
+// unknown name 400s rather than silently being dropped, since the caller
+// probably mistyped a source and would otherwise wonder why it never ran.
+// See README's "near the subrequest cap" note for why the two-step
+// (`?sources=github,posts,goatcounter` then `?sources=audit`) form is the
+// recommended way to run a full manual collect by hand.
+function parseSourcesParam(url: URL): SourceName[] | { error: string } {
+  const raw = url.searchParams.get("sources");
+  if (raw === null) return ALL_SOURCES;
+  const names = raw
+    .split(",")
+    .map(s => s.trim())
+    .filter(s => s.length > 0);
+  const unknown = names.filter(n => !isSourceName(n));
+  if (unknown.length > 0) return { error: `unknown source(s): ${unknown.join(", ")} (known: ${ALL_SOURCES.join(", ")})` };
+  return names as SourceName[];
+}
+
+async function handleCollect(req: Request, env: Env, fetchFn: FetchFn): Promise<Response> {
+  const sources = parseSourcesParam(new URL(req.url));
+  if (!Array.isArray(sources)) return jsonResponse(sources, 400);
+  const reports = await runDailyCollect(env, new Date(), fetchFn, sources);
   return jsonResponse(reports, 200);
 }
 
@@ -152,7 +184,7 @@ export async function handleAdmin(req: Request, env: Env, path: string, fetchFn:
     case "PUT /api/admin/todos":
       return handlePutTodo(req, env);
     case "POST /api/admin/collect":
-      return handleCollect(env, fetchFn);
+      return handleCollect(req, env, fetchFn);
     case "POST /api/admin/backfill":
       return handleBackfill(env, fetchFn);
     default:

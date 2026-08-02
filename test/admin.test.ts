@@ -177,6 +177,45 @@ describe("POST /api/admin/posts", () => {
     expect(body.error).toContain("url");
   });
 
+  // M2: posts.published_at has a schema column and a UI column but, before this
+  // fix, no writer — POST /api/admin/posts silently always inserted NULL.
+  it("accepts an optional publishedAt (ISO string) and persists it", async () => {
+    const url = "https://www.v2ex.com/t/3330001";
+    const publishedAt = "2026-07-15T09:00:00Z";
+    const res = await handleAdmin(
+      req("POST", "/api/admin/posts", { body: { url, project: "nightide", title: "with date", publishedAt } }),
+      env,
+      "/api/admin/posts",
+      v2exStub
+    );
+    expect(res.status).toBe(201);
+    const { id } = await res.json<{ id: number }>();
+
+    const post = await env.DB
+      .prepare("select published_at as publishedAt from posts where id=?1")
+      .bind(id)
+      .first<{ publishedAt: string | null }>();
+    expect(post?.publishedAt).toBe(publishedAt);
+  });
+
+  it("defaults publishedAt to null when omitted (unchanged behavior)", async () => {
+    const url = "https://www.v2ex.com/t/3330002";
+    const res = await handleAdmin(
+      req("POST", "/api/admin/posts", { body: { url, project: "nightide" } }),
+      env,
+      "/api/admin/posts",
+      v2exStub
+    );
+    expect(res.status).toBe(201);
+    const { id } = await res.json<{ id: number }>();
+
+    const post = await env.DB
+      .prepare("select published_at as publishedAt from posts where id=?1")
+      .bind(id)
+      .first<{ publishedAt: string | null }>();
+    expect(post?.publishedAt).toBeNull();
+  });
+
   it("still creates the post (deferring metrics) when fetchPostMetrics fails, so the post isn't stranded behind the unique url constraint", async () => {
     const url = "https://www.v2ex.com/t/999888";
     const failingFetch: typeof fetch = async () => new Response("boom", { status: 500 });
@@ -336,6 +375,53 @@ describe("POST /api/admin/collect", () => {
     expect(res.status).toBe(200);
     const reports = await res.json<{ source: string; ok: boolean }[]>();
     expect(reports.map(r => r.source).sort()).toEqual(["audit", "github", "goatcounter", "posts"]);
+  });
+
+  // C1: ?sources= lets a manual collect stay under the free-tier
+  // 50-subrequests-per-invocation cap (README's two-step curl workflow).
+  it("with ?sources=github,posts, runs only those two sources", async () => {
+    const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
+    const res = await handleAdmin(
+      req("POST", "/api/admin/collect?sources=github,posts"),
+      env,
+      "/api/admin/collect",
+      alwaysNotFound
+    );
+    expect(res.status).toBe(200);
+    const reports = await res.json<{ source: string; ok: boolean }[]>();
+    expect(reports.map(r => r.source).sort()).toEqual(["github", "posts"]);
+
+    const sourceRuns = await db.listSourceRuns(env.DB);
+    expect(sourceRuns.map(r => r.source).sort()).toEqual(["github", "posts"]);
+  });
+
+  it("with ?sources=audit, runs only audit", async () => {
+    const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
+    const res = await handleAdmin(
+      req("POST", "/api/admin/collect?sources=audit"),
+      env,
+      "/api/admin/collect",
+      alwaysNotFound
+    );
+    expect(res.status).toBe(200);
+    const reports = await res.json<{ source: string; ok: boolean }[]>();
+    expect(reports.map(r => r.source)).toEqual(["audit"]);
+  });
+
+  it("400s with an unknown source name, and runs nothing", async () => {
+    const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
+    const res = await handleAdmin(
+      req("POST", "/api/admin/collect?sources=github,bogus"),
+      env,
+      "/api/admin/collect",
+      alwaysNotFound
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("bogus");
+
+    const sourceRuns = await db.listSourceRuns(env.DB);
+    expect(sourceRuns).toEqual([]);
   });
 });
 

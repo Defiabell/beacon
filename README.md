@@ -15,7 +15,7 @@ beacon is a single **Cloudflare Worker + D1 database**, organized around three l
 - **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 9 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced), and a channel-coverage matrix (`src/channels.ts`) scores each project against 17 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
 - **Act** — every failed audit check and every high-scoring unposted channel becomes a row in `todos`, surfaced on the dashboard and via `/api/todos` — a concrete next action instead of just a report.
 
-Everything is served by one Worker: a public, unauthenticated SSR dashboard (`/`, `/p/:project`, `/matrix`, `/todos`, `/posts`) plus a Bearer-token-gated admin API for writes (`/api/admin/*`).
+Everything is served by one Worker: a public, unauthenticated SSR dashboard (`/`, `/p/:project`, `/matrix`, `/todos`, `/posts`) plus a Bearer-token-gated admin API for writes (`/api/admin/*`). Every GET response outside `/api/admin/*` also goes through the Workers Cache API — on a custom domain (not a bare `workers.dev` subdomain) this gives true edge caching in addition to the `max-age=60` browser cache.
 
 ## Deploy your own (~5 min)
 
@@ -66,9 +66,16 @@ Finally, seed history and run the first collection:
 curl -X POST https://beacon.<your-subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 
-# runs today's github/posts/goatcounter/audit collectors immediately
-# (the daily cron does the same thing automatically from tomorrow on)
-curl -X POST https://beacon.<your-subdomain>.workers.dev/api/admin/collect \
+# runs today's collectors immediately (the daily cron does the same thing
+# automatically from tomorrow on, split across two invocations — see below).
+# A single call with no ?sources= runs all four collectors (github, posts,
+# goatcounter, audit) in one invocation, which on a multi-repo fleet gets
+# close to the Workers free tier's 50-subrequests-per-invocation cap. The
+# two-step form below is the safe way to do this by hand — same split the
+# cron itself uses (wrangler.toml's two crons + src/index.ts):
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=github,posts,goatcounter" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=audit" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
@@ -97,11 +104,13 @@ Every `/api/admin/*` route requires `Authorization: Bearer <ADMIN_TOKEN>`.
 curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/posts \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"url": "https://news.ycombinator.com/item?id=12345678", "project": "shotsync", "title": "Show HN: shotsync"}'
+  -d '{"url": "https://news.ycombinator.com/item?id=12345678", "project": "shotsync", "title": "Show HN: shotsync", "publishedAt": "2026-07-15T09:00:00Z"}'
 # -> 201 {"id": 7}
 # or, if the platform's metrics API failed on this first try:
 # -> 201 {"id": 7, "metrics": "deferred"}
 ```
+
+`publishedAt` is optional (an ISO 8601 string) — omit it and the post is stored with no publish date, same as before.
 
 **Mark a channel as posted / planned / not applicable:**
 
@@ -126,9 +135,17 @@ curl -X PUT https://beacon.<subdomain>.workers.dev/api/admin/todos \
 **Trigger a collection or backfill manually** (same routes used in the deploy steps above):
 
 ```bash
+# all four collectors in one call — near the free tier's subrequest cap on a
+# multi-repo fleet (see the deploy steps above for the safer two-step form)
 curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/collect \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 # -> 200 [{"source":"github","ok":true}, {"source":"posts","ok":true}, ...]
+
+# ?sources=<comma-separated names> restricts the run to a subset of
+# github/posts/goatcounter/audit; an unknown name 400s
+curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=audit" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# -> 200 [{"source":"audit","ok":true}]
 
 curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer $ADMIN_TOKEN"

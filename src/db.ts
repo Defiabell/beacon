@@ -184,6 +184,26 @@ export async function insertTodoIfNew(db: D1Database, t: Todo): Promise<void> {
     .run();
 }
 
+// Closes (status='open' -> 'done', done_at=doneAt) any open todo matching this
+// exact (project, source, title) — a no-op UPDATE (0 rows affected) when no
+// such open todo exists, so callers can call it unconditionally rather than
+// checking existence first. Used by src/audit/run.ts to auto-close a todo
+// whose underlying check now passes; relies on todoTitle (src/audit/checks.ts)
+// being stable per (project, checkId) so the title matches the row an earlier
+// failing run created via insertTodoIfNew.
+export async function closeTodoByTitle(
+  db: D1Database,
+  project: string,
+  source: Todo["source"],
+  title: string,
+  doneAt: string
+): Promise<void> {
+  await db
+    .prepare(`UPDATE todos SET status='done', done_at=?4 WHERE status='open' AND project=?1 AND source=?2 AND title=?3`)
+    .bind(project, source, title, doneAt)
+    .run();
+}
+
 export async function setTodoStatus(
   db: D1Database,
   id: number,

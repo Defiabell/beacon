@@ -211,6 +211,19 @@ describe("renderTodos", () => {
   it("doesn't crash on an empty list", () => {
     expect(() => renderTodos([])).not.toThrow();
   });
+
+  // M1: the shared CSS (src/ui/layout.ts) defines `ul.plain` styling, but
+  // renderTodos used to emit bare `<ul>` for both the open and done lists,
+  // leaving them unstyled.
+  it("renders both the open and done lists with class=\"plain\"", () => {
+    const todos: Todo[] = [
+      { id: 1, project: "nightide", source: "audit", title: "open item", priority: 1, status: "open" },
+      { id: 2, project: "nightide", source: "manual", title: "done item", priority: 1, status: "done", doneAt: "2026-08-01T00:00:00Z" }
+    ];
+    const html = renderTodos(todos);
+    const matches = html.match(/<ul class="plain"/g) ?? [];
+    expect(matches.length).toBe(2);
+  });
 });
 
 describe("renderPosts", () => {

@@ -21,6 +21,9 @@ export interface CollectorReport {
   error?: string;
 }
 
+export type SourceName = "github" | "posts" | "goatcounter" | "audit";
+export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "audit"];
+
 interface SourceResult {
   ok: boolean;
   error?: string;
@@ -94,12 +97,26 @@ async function collectAudit(env: Env, fetchFn: FetchFn): Promise<SourceResult> {
   return { ok: true };
 }
 
-export async function runDailyCollect(env: Env, now: Date, fetchFn: FetchFn = fetch): Promise<CollectorReport[]> {
+// `sources` (default: all four) lets a caller run only a subset — used to
+// split the daily cron across two invocations (see wrangler.toml / src/index.ts's
+// scheduled handler) and by the admin ?sources= query param (src/api/admin.ts),
+// both in service of staying under the Workers free tier's
+// 50-subrequests-per-invocation cap on a multi-repo fleet. recordSourceRun
+// behavior is unchanged: only the sources actually run get a source_runs row
+// written/updated this invocation.
+export async function runDailyCollect(
+  env: Env,
+  now: Date,
+  fetchFn: FetchFn = fetch,
+  sources: SourceName[] = ALL_SOURCES
+): Promise<CollectorReport[]> {
   const date = now.toISOString().slice(0, 10);
-  return [
-    await runSource(env.DB, "github", () => collectGithub(env, date, fetchFn)),
-    await runSource(env.DB, "posts", () => collectPosts(env, date, fetchFn)),
-    await runSource(env.DB, "goatcounter", () => collectGoatcounter(env, date, fetchFn)),
-    await runSource(env.DB, "audit", () => collectAudit(env, fetchFn))
-  ];
+  const reports: CollectorReport[] = [];
+  if (sources.includes("github")) reports.push(await runSource(env.DB, "github", () => collectGithub(env, date, fetchFn)));
+  if (sources.includes("posts")) reports.push(await runSource(env.DB, "posts", () => collectPosts(env, date, fetchFn)));
+  if (sources.includes("goatcounter")) {
+    reports.push(await runSource(env.DB, "goatcounter", () => collectGoatcounter(env, date, fetchFn)));
+  }
+  if (sources.includes("audit")) reports.push(await runSource(env.DB, "audit", () => collectAudit(env, fetchFn)));
+  return reports;
 }

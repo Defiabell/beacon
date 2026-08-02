@@ -148,8 +148,17 @@ export function runRepoChecks(input: RepoAuditInput): CheckResult[] {
 }
 
 // Renders the exact todo-title templates from the audit rule table (task-9-brief.md),
-// substituting {repo} with the project name and, for readme-links, {列表} with the
-// broken-link list. Only meaningful for a checkId that actually failed.
+// substituting {repo} with the project name. Only meaningful for a checkId that
+// actually failed.
+//
+// Every title is STABLE across runs for a given (project, checkId) — in
+// particular readme-links does NOT interpolate the broken-link list (that
+// list lives in the CheckResult.detail instead, rendered on the project page).
+// A title that varied with run-specific data (like the broken-link set) would
+// defeat both the todos_unique index's dedup (src/db.ts's insertTodoIfNew) —
+// a different link set would look like a brand-new todo instead of the same
+// recurring one — and closeTodoByTitle's auto-close in src/audit/run.ts, which
+// matches the fail-run's title against the later pass-run's title verbatim.
 export function todoTitle(checkId: string, input: RepoAuditInput): string {
   switch (checkId) {
     case "description":
@@ -165,7 +174,7 @@ export function todoTitle(checkId: string, input: RepoAuditInput): string {
     case "release-assets":
       return `把 ${input.project} 预编译产物挂到 GitHub Releases`;
     case "readme-links":
-      return `修复 ${input.project} README 断链：${input.brokenLinks.join(", ")}`;
+      return `修复 ${input.project} README 断链`;
     case "social-preview":
       return `给 ${input.project} 设置 social preview 图`;
     case "homepage":
