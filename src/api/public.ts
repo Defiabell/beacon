@@ -76,7 +76,10 @@ function shiftDate(date: string, deltaDays: number): string {
 // returned by getStarSeries). When fewer than 7 days of history exist — no row
 // has a date <= the 7-days-back target — the earliest row is used as the
 // baseline instead, per the task-11 spec.
-function computeStarsDelta(series: { date: string; stars: number }[]): { stars: number; starsDelta7d: number } {
+// Exported (beyond the required public.ts contract) so this pure branch logic
+// can be unit-tested directly, the same way src/audit/checks.ts's pure
+// functions are tested without going through the HTTP layer.
+export function computeStarsDelta(series: { date: string; stars: number }[]): { stars: number; starsDelta7d: number } {
   if (series.length === 0) return { stars: 0, starsDelta7d: 0 };
   const latest = series[series.length - 1];
   const targetDate = shiftDate(latest.date, -STAR_DELTA_WINDOW_DAYS);
@@ -233,7 +236,18 @@ export async function handlePublicApi(req: Request, env: Env, path: string): Pro
 
   const projectMatch = path.match(PROJECT_PATH);
   if (projectMatch) {
-    const detail = await buildProjectDetail(env, decodeURIComponent(projectMatch[1]));
+    let name: string;
+    try {
+      name = decodeURIComponent(projectMatch[1]);
+    } catch {
+      // Malformed percent-encoding (e.g. "%zz") makes decodeURIComponent throw
+      // a URIError rather than returning something falsy. This is a public,
+      // unauthenticated endpoint with no upstream catch — without this guard
+      // that throw would 500 the whole request instead of the same 404 an
+      // unknown-but-well-formed project name gets.
+      return jsonError({ error: "not found" }, 404);
+    }
+    const detail = await buildProjectDetail(env, name);
     if (!detail) return jsonError({ error: "not found" }, 404);
     return jsonOk(detail);
   }

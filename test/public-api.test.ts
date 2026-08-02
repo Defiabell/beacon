@@ -5,6 +5,7 @@ import { CONFIG } from "../src/config";
 import { CHANNELS, suggestPairs } from "../src/channels";
 import {
   handlePublicApi,
+  computeStarsDelta,
   type Overview,
   type ProjectDetail,
   type MatrixData,
@@ -39,6 +40,28 @@ async function seedTodo(opts: {
 function repoRow(repo: string, date: string, views: number, clones: number) {
   return { repo, date, views, uniqueViews: views, clones, uniqueClones: clones, stars: 0, forks: 0 };
 }
+
+// Pure-function unit tests for the two star-delta branches the integration
+// fixture above doesn't exercise directly (it covers "nearest-before" and
+// "fewer than 7 days -> earliest row", but not a single-row series or an
+// exact hit on the 7-days-back target date). No DB involved — same style as
+// src/audit/checks.ts's pure functions being tested directly in audit.test.ts.
+describe("computeStarsDelta", () => {
+  it("a single-row series has no prior baseline to diff against -> delta 0", () => {
+    const result = computeStarsDelta([{ date: "2026-08-01", stars: 42 }]);
+    expect(result).toEqual({ stars: 42, starsDelta7d: 0 });
+  });
+
+  it("uses a row exactly at the 7-days-back target date as the baseline, not an earlier row", () => {
+    const series = [
+      { date: "2026-07-20", stars: 10 },
+      { date: "2026-08-01", stars: 50 }, // exactly 7 days before the latest row below
+      { date: "2026-08-08", stars: 90 }
+    ];
+    const result = computeStarsDelta(series);
+    expect(result).toEqual({ stars: 90, starsDelta7d: 40 }); // 90-50, not 90-10
+  });
+});
 
 // Everything except site_daily is seeded once here — site_daily is seeded
 // later, inside the "sitePv7d" describe below, specifically so an earlier
@@ -337,6 +360,15 @@ describe("routing edge cases", () => {
     const res = await call("POST", "/api/overview");
     expect(res!.status).toBe(405);
     expect(res!.headers.get("Cache-Control")).toBeNull();
+  });
+
+  it("404s (rather than throwing a URIError) on a malformed percent-encoded project name", async () => {
+    // "%zz" is not valid percent-encoding; decodeURIComponent throws on it.
+    // This is a public, unauthenticated endpoint with no upstream try/catch —
+    // an unguarded decode here would 500 the whole request instead of 404ing
+    // it the same way an unknown-but-well-formed project name does.
+    const res = await call("GET", "/api/project/%zz");
+    expect(res!.status).toBe(404);
   });
 });
 
