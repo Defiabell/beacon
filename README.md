@@ -12,7 +12,7 @@ A growth engine for your side projects — self-hosted on Cloudflare's free tier
 beacon is a single **Cloudflare Worker + D1 database**, organized around three layers:
 
 - **Measure** — a daily cron (`0 1 * * *` UTC, see `wrangler.toml`) pulls each tracked repo's GitHub traffic/clones/star history (`src/collect/github.ts`), refreshes metrics for every post you've registered on V2EX/LinuxDO/Hacker News/Reddit (`src/collect/posts.ts`), and — optionally — daily pageviews from a GoatCounter site (`src/collect/goatcounter.ts`).
-- **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 9 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced), and a channel-coverage matrix (`src/channels.ts`) scores each project against 18 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
+- **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 9 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced), and a channel-coverage matrix (`src/channels.ts`) scores each project against 17 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
 - **Act** — every failed audit check and every high-scoring unposted channel becomes a row in `todos`, surfaced on the dashboard and via `/api/todos` — a concrete next action instead of just a report.
 
 Everything is served by one Worker: a public, unauthenticated SSR dashboard (`/`, `/p/:project`, `/matrix`, `/todos`, `/posts`) plus a Bearer-token-gated admin API for writes (`/api/admin/*`).
@@ -38,9 +38,12 @@ npx wrangler d1 migrations apply beacon --remote
 # 3. set the GitHub token — a fine-grained PAT scoped to just the repos you track:
 #    - Administration: Read-only  (required by the traffic API — GET /repos/{owner}/{repo}/traffic/*
 #      only works for a token with push/admin-level access to the repo)
-#    - Contents: Read-only        (README, releases, and the stargazers list — basic repo
-#      metadata like description/topics/license is covered by every token's built-in,
-#      non-optional Metadata:Read permission)
+#    - Contents: Read-only        (README and releases — basic repo metadata like
+#      description/topics/license is covered by every token's built-in, non-optional
+#      Metadata:Read permission)
+# Star history backfill (GitHub's stargazers API) needs no extra permission for a
+# public repo — it's unauthenticated-readable; the token here just lifts you out of
+# the much lower unauthenticated rate limit.
 npx wrangler secret put GITHUB_TOKEN
 
 # 4. set the admin token — any long random string; it gates every /api/admin/* write

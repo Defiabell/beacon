@@ -12,7 +12,7 @@
 beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织：
 
 - **Measure（度量）** —— 每日定时任务（`wrangler.toml` 里的 `0 1 * * *`，UTC）拉取每个被跟踪仓库的 GitHub 流量/clone/star 历史（`src/collect/github.ts`），刷新你在 V2EX / LinuxDO / Hacker News / Reddit 上登记过的每篇帖子的指标（`src/collect/posts.ts`），以及可选的 GoatCounter 站点每日 pageview（`src/collect/goatcounter.ts`）。
-- **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 9 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 18 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
+- **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 9 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 
 整个系统跑在一个 Worker 里：一个公开、无需鉴权的 SSR dashboard（`/`、`/p/:project`、`/matrix`、`/todos`、`/posts`），加一个用 Bearer token 保护的写入用 admin API（`/api/admin/*`）。
@@ -38,8 +38,10 @@ npx wrangler d1 migrations apply beacon --remote
 # 3. 设置 GitHub token —— 一个只授权给你要跟踪的仓库的 fine-grained PAT：
 #    - Administration: Read-only （traffic API 需要——GET /repos/{owner}/{repo}/traffic/*
 #      只对拥有该仓库 push/admin 级别权限的 token 开放）
-#    - Contents: Read-only       （README、releases、stargazers 列表——description/topics/license
-#      这类基础仓库元信息由每个 token 都自带、无法关闭的 Metadata:Read 权限覆盖）
+#    - Contents: Read-only       （README、releases——description/topics/license 这类基础仓库
+#      元信息由每个 token 都自带、无法关闭的 Metadata:Read 权限覆盖）
+# star 历史回填（GitHub stargazers API）对公开仓库不需要额外权限——该接口本身无需鉴权即可读，
+# 这里配 token 只是把你从更低的未鉴权速率限制里解放出来。
 npx wrangler secret put GITHUB_TOKEN
 
 # 4. 设置 admin token —— 任意长随机串；它保护所有 /api/admin/* 写操作
