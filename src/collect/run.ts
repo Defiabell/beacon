@@ -3,6 +3,7 @@ import type { FetchFn } from "./github";
 import { fetchRepoTraffic } from "./github";
 import { fetchPostMetrics } from "./posts";
 import { fetchSiteDaily } from "./goatcounter";
+import { runAudit } from "../audit/run";
 import { CONFIG } from "../config";
 import {
   upsertRepoDaily,
@@ -88,8 +89,8 @@ async function collectGoatcounter(env: Env, date: string, fetchFn: FetchFn): Pro
   return { ok: true };
 }
 
-// TODO(Task 9): wire up the real freshness/health audit checks once implemented.
-async function collectAudit(): Promise<SourceResult> {
+async function collectAudit(env: Env, fetchFn: FetchFn): Promise<SourceResult> {
+  await runAudit(env, fetchFn);
   return { ok: true };
 }
 
@@ -99,6 +100,6 @@ export async function runDailyCollect(env: Env, now: Date, fetchFn: FetchFn = fe
     await runSource(env.DB, "github", () => collectGithub(env, date, fetchFn)),
     await runSource(env.DB, "posts", () => collectPosts(env, date, fetchFn)),
     await runSource(env.DB, "goatcounter", () => collectGoatcounter(env, date, fetchFn)),
-    await runSource(env.DB, "audit", () => collectAudit())
+    await runSource(env.DB, "audit", () => collectAudit(env, fetchFn))
   ];
 }

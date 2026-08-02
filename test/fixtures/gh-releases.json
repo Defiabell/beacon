@@ -1,0 +1,4 @@
+[
+  { "tag_name": "v0.2.0", "assets": [{ "id": 1, "name": "shotsync-macos-arm64.zip" }, { "id": 2, "name": "shotsync-macos-x64.zip" }] },
+  { "tag_name": "v0.1.0", "assets": [] }
+]

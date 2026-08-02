@@ -12,12 +12,22 @@ import hnFixture from "./fixtures/hn-item.json";
 const FAILING_POST_URL = "https://www.v2ex.com/t/999999";
 const OK_POST_URL = "https://news.ycombinator.com/item?id=39912345";
 
+const AUDIT_README =
+  "# Project\n\nA short English introduction sentence with plenty of ASCII letters to pass the checkpoint.\n\n![screenshot](https://example.com/shot.png)\n";
+
 const stub: typeof fetch = async input => {
   const url = String(input);
   if (url.endsWith("/traffic/views")) return Response.json(views);
   if (url.endsWith("/traffic/clones")) return Response.json(clones);
   if (url.endsWith("/traffic/popular/referrers")) return Response.json(referrers);
+  if (url.endsWith("/readme")) return new Response(AUDIT_README, { status: 200 });
+  if (url.includes("/releases?per_page=10")) return Response.json([]);
   if (url.includes("/repos/")) return Response.json(repoMeta);
+  if (url.startsWith("https://github.com/")) {
+    return new Response('<meta property="og:image" content="https://example.com/custom-social.png">', {
+      status: 200
+    });
+  }
   if (url.includes("v2ex.com/api/topics/show.json")) return new Response("boom", { status: 500 });
   if (url.includes("hacker-news.firebaseio.com")) return Response.json(hnFixture);
   return new Response("not found", { status: 404 });
