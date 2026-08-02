@@ -1,0 +1,166 @@
+<!-- @dsCard group="Pages" -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>beacon · 项目详情</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root {
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
+    --series-1: #2a78d6; --good-text: #006300;
+    --pass: #0ca30c; --fail: #d03b3b;
+    background: var(--page); color: var(--ink-1); min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+      --series-1: #3987e5; --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+    --series-1: #3987e5; --good-text: #0ca30c;
+  }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 20px 28px 0; max-width: 1120px; margin: 0 auto; }
+  header .logo { font-size: 20px; font-weight: 700; }
+  header .logo::before { content: "⌂ "; color: var(--series-1); }
+  header nav { display: flex; gap: 18px; font-size: 14px; color: var(--ink-2); margin-left: auto; }
+  header nav a { color: inherit; text-decoration: none; }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 28px 40px; }
+  .crumb { font-size: 12.5px; color: var(--muted); margin-bottom: 6px; }
+  h1 { margin: 0 0 2px; font-size: 22px; }
+  .meta { font-size: 13px; color: var(--ink-2); margin-bottom: 18px; }
+  .meta a { color: var(--series-1); text-decoration: none; }
+  .cols { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; align-items: start; }
+  .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; margin-bottom: 16px; }
+  .card h2 { margin: 0 0 2px; font-size: 14.5px; }
+  .card p.sub { margin: 0 0 10px; font-size: 12px; color: var(--muted); }
+  .hero { display: flex; gap: 26px; margin: 4px 0 8px; }
+  .hero .n { font-size: 30px; font-weight: 700; }
+  .hero .l { font-size: 11.5px; color: var(--ink-2); }
+  .hero .delta { font-size: 12.5px; font-weight: 600; color: var(--good-text); }
+  svg text { font-family: inherit; font-size: 10px; fill: var(--muted); }
+  svg .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  svg .grid { stroke: var(--grid); stroke-width: 1; }
+  svg .base { stroke: var(--axis); stroke-width: 1; }
+  svg .dot-end { fill: var(--series-1); }
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 4px 0; border-bottom: 1px solid var(--grid); }
+  td { padding: 7px 0; border-bottom: 1px solid var(--grid); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: 0; }
+  ul.audit { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }
+  ul.audit li { display: flex; gap: 8px; padding: 7px 0; border-bottom: 1px solid var(--grid); align-items: baseline; }
+  ul.audit li:last-child { border-bottom: 0; }
+  .ok::before { content: "✓ "; color: var(--pass); font-weight: 700; }
+  .bad::before { content: "✗ "; color: var(--fail); font-weight: 700; }
+  .na { color: var(--muted); }
+  .na::before { content: "— "; }
+  ul.audit .fix { margin-left: auto; font-size: 12px; color: var(--series-1); text-decoration: none; white-space: nowrap; }
+  .platform { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--ink-2); }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <span class="logo">beacon</span>
+    <nav><a href="#">← 返回总览</a></nav>
+  </header>
+  <main>
+    <p class="crumb">总览 / 项目</p>
+    <h1>shotsync</h1>
+    <p class="meta"><a href="#">github.com/Defiabell/shotsync</a> · selfhosted / tool / web · 数据截至 2026-08-02</p>
+
+    <div class="cols">
+      <div>
+        <div class="card">
+          <h2>Star 增长</h2>
+          <p class="sub">累计 star 数（stargazer 时间戳回填，非 14 天窗口）</p>
+          <div class="hero">
+            <div><div class="n">12</div><div class="l">stars</div></div>
+            <div><div class="delta">▲ 4</div><div class="l">近 7 天</div></div>
+            <div><div class="delta">▲ 7</div><div class="l">近 30 天</div></div>
+          </div>
+          <svg width="100%" height="120" viewBox="0 0 640 120" role="img" aria-label="star 累计增长曲线">
+            <line class="grid" x1="40" y1="20" x2="640" y2="20"/><text x="0" y="24">12</text>
+            <line class="grid" x1="40" y1="60" x2="640" y2="60"/><text x="0" y="64">6</text>
+            <line class="base" x1="40" y1="105" x2="640" y2="105"/><text x="0" y="109">0</text>
+            <polyline class="line" points="40,103 120,100 200,96 280,92 360,88 420,80 480,60 540,40 600,26 632,22"/>
+            <circle class="dot-end" cx="632" cy="22" r="3.5"/>
+            <text x="40" y="119">6-01</text><text x="330" y="119">7-01</text><text x="600" y="119">8-02</text>
+          </svg>
+        </div>
+
+        <div class="card">
+          <h2>仓库流量 · 近 14 天</h2>
+          <p class="sub">GitHub traffic（每日采集累积，不再受 14 天窗口限制）</p>
+          <div class="two">
+            <div>
+              <div class="hero"><div><div class="n">301</div><div class="l">views · 14d</div></div><div><div class="n">74</div><div class="l">unique</div></div></div>
+              <svg width="100%" height="48" viewBox="0 0 300 48" role="img" aria-label="views 走势">
+                <line class="base" x1="0" y1="46" x2="300" y2="46"/>
+                <polyline class="line" points="0,40 23,36 46,38 69,32 92,28 115,30 138,24 161,20 184,26 207,16 230,8 253,12 276,6 300,9"/>
+              </svg>
+            </div>
+            <div>
+              <div class="hero"><div><div class="n">57</div><div class="l">clones · 14d</div></div><div><div class="n">41</div><div class="l">unique</div></div></div>
+              <svg width="100%" height="48" viewBox="0 0 300 48" role="img" aria-label="clones 走势">
+                <line class="base" x1="0" y1="46" x2="300" y2="46"/>
+                <polyline class="line" points="0,44 23,42 46,43 69,40 92,41 115,38 138,36 161,39 184,34 207,30 230,33 253,28 276,31 300,26"/>
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>帖子表现</h2>
+          <table>
+            <tr><th>帖子</th><th>平台</th><th class="num" style="text-align:right">回复</th><th class="num" style="text-align:right">浏览</th><th class="num" style="text-align:right">分数</th></tr>
+            <tr><td>做了个自部署的跨设备图片中转池…</td><td><span class="platform">V2EX</span></td><td class="num">18</td><td class="num">—</td><td class="num">—</td></tr>
+            <tr><td>Show HN: Self-hosted image drop on CF free tier</td><td><span class="platform">HN</span></td><td class="num">23</td><td class="num">—</td><td class="num">61</td></tr>
+          </table>
+        </div>
+      </div>
+
+      <div>
+        <div class="card">
+          <h2>流量来源</h2>
+          <p class="sub">referrers · 最新快照</p>
+          <table>
+            <tr><th>来源</th><th class="num" style="text-align:right">次数</th><th class="num" style="text-align:right">独立</th></tr>
+            <tr><td>news.ycombinator.com</td><td class="num">89</td><td class="num">64</td></tr>
+            <tr><td>v2ex.com</td><td class="num">45</td><td class="num">38</td></tr>
+            <tr><td>linux.do</td><td class="num">23</td><td class="num">19</td></tr>
+            <tr><td>Google</td><td class="num">12</td><td class="num">11</td></tr>
+          </table>
+        </div>
+
+        <div class="card">
+          <h2>曝光体检</h2>
+          <p class="sub">8 项检查 · 2 项待修</p>
+          <ul class="audit">
+            <li class="ok">description ≥ 20 字符</li>
+            <li class="ok">topics ≥ 3 个</li>
+            <li class="ok">LICENSE</li>
+            <li class="ok">README 英文简介</li>
+            <li class="ok">README 含截图</li>
+            <li class="bad">social preview 图未设置<a class="fix" href="#">建待办 →</a></li>
+            <li class="bad">homepage 字段为空<a class="fix" href="#">建待办 →</a></li>
+            <li class="na">Release 产物（web 项目不适用）</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!-- @dsCard group="Foundations" -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>beacon · 设计 tokens</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root {
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
+    --series-1: #2a78d6; --good-text: #006300;
+    background: var(--page); color: var(--ink-1); min-height: 100vh; padding: 24px 28px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+      --series-1: #3987e5; --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+    --series-1: #3987e5; --good-text: #0ca30c;
+  }
+  h1 { margin: 0 0 2px; font-size: 18px; }
+  p.sub { margin: 0 0 18px; font-size: 12.5px; color: var(--muted); }
+  h2 { font-size: 13px; margin: 18px 0 8px; color: var(--ink-2); }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .sw { width: 132px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 8px; font-size: 11px; }
+  .sw .c { height: 36px; border-radius: 6px; border: 1px solid var(--border); margin-bottom: 6px; }
+  .sw b { display: block; font-size: 11.5px; color: var(--ink-1); }
+  .sw span { color: var(--muted); }
+  .type { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; }
+  .type div { padding: 4px 0; border-bottom: 1px solid var(--grid); }
+  .type div:last-child { border-bottom: 0; }
+  .type .t1 { font-size: 22px; font-weight: 700; }
+  .type .t2 { font-size: 15px; font-weight: 600; }
+  .type .t3 { font-size: 14px; }
+  .type .t4 { font-size: 12.5px; color: var(--ink-2); }
+  .type .t5 { font-size: 11px; color: var(--muted); }
+  .note { font-size: 12px; color: var(--muted); margin-top: 14px; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <h1>beacon 设计 tokens</h1>
+  <p class="sub">取自 dataviz 参考色板（已通过 CVD／对比度验证），系统字体栈，明暗双主题（media query + data-theme 双覆盖）。</p>
+
+  <h2>色彩（明暗值成对，示值为 light）</h2>
+  <div class="row">
+    <div class="sw"><div class="c" style="background:#2a78d6"></div><b>series-1 / 主色</b><span>#2a78d6 · 暗 #3987e5</span></div>
+    <div class="sw"><div class="c" style="background:#fcfcfb"></div><b>surface-1 卡片</b><span>#fcfcfb · 暗 #1a1a19</span></div>
+    <div class="sw"><div class="c" style="background:#f9f9f7"></div><b>page 页面底</b><span>#f9f9f7 · 暗 #0d0d0d</span></div>
+    <div class="sw"><div class="c" style="background:#52514e"></div><b>ink-2 次要文本</b><span>#52514e · 暗 #c3c2b7</span></div>
+    <div class="sw"><div class="c" style="background:#e1e0d9"></div><b>grid 分隔线</b><span>#e1e0d9 · 暗 #2c2c2a</span></div>
+  </div>
+  <h2>状态／优先级（固定，不随主题换）</h2>
+  <div class="row">
+    <div class="sw"><div class="c" style="background:#0ca30c"></div><b>good ✓ 已发/通过</b><span>#0ca30c ＋图标</span></div>
+    <div class="sw"><div class="c" style="background:#d03b3b"></div><b>P1 / fail ✗</b><span>#d03b3b ＋文字标签</span></div>
+    <div class="sw"><div class="c" style="background:#ec835a"></div><b>P2</b><span>#ec835a ＋文字标签</span></div>
+    <div class="sw"><div class="c" style="background:#fab219"></div><b>P3</b><span>#fab219 ＋文字标签</span></div>
+  </div>
+
+  <h2>字阶</h2>
+  <div class="type">
+    <div class="t1">22–30px · 页面标题／hero 数字</div>
+    <div class="t2">15px · 卡片标题</div>
+    <div class="t3">14px · 正文／列表</div>
+    <div class="t4">12.5px · 说明文字</div>
+    <div class="t5">11px · 表头／标签（表格数字用 tabular-nums）</div>
+  </div>
+
+  <p class="note">图表规范：单系列 sparkline 一律 series-1 蓝、2px 线宽、无图例（标题即系列名）；禁双轴；状态色永远配图标或文字，不单靠颜色。</p>
+</div>
+</body>
+</html>

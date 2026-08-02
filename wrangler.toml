@@ -1,0 +1,11 @@
+name = "beacon"
+main = "src/index.ts"
+compatibility_date = "2026-07-01"
+
+[triggers]
+crons = ["0 1 * * *"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "beacon"
+database_id = "placeholder-replace-after-d1-create"

@@ -1,0 +1,153 @@
+<!-- @dsCard group="Pages" -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>beacon · 渠道矩阵</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root {
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
+    --series-1: #2a78d6; --posted: #0ca30c;
+    --sug-bg: #cde2fb; --sug-ink: #104281;
+    background: var(--page); color: var(--ink-1); min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+      --series-1: #3987e5; --sug-bg: #184f95; --sug-ink: #cde2fb;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+    --series-1: #3987e5; --sug-bg: #184f95; --sug-ink: #cde2fb;
+  }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 20px 28px 0; max-width: 1120px; margin: 0 auto; }
+  header .logo { font-size: 20px; font-weight: 700; }
+  header .logo::before { content: "⌂ "; color: var(--series-1); }
+  header nav { display: flex; gap: 18px; font-size: 14px; color: var(--ink-2); margin-left: auto; }
+  header nav a { color: inherit; text-decoration: none; padding-bottom: 2px; }
+  header nav a.active { color: var(--ink-1); font-weight: 600; border-bottom: 2px solid var(--series-1); }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 28px 40px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  p.lead { margin: 0 0 16px; font-size: 13px; color: var(--ink-2); }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }
+  .scroll { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; }
+  table { border-collapse: collapse; font-size: 13px; min-width: 980px; width: 100%; }
+  th, td { padding: 9px 10px; text-align: center; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  thead th { font-size: 11px; color: var(--muted); font-weight: 600; vertical-align: bottom; }
+  thead th .lang { display: block; font-weight: 400; }
+  tbody th { text-align: left; font-weight: 600; position: sticky; left: 0; background: var(--surface-1); }
+  tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
+  .posted { color: var(--posted); font-weight: 700; }
+  .planned { color: var(--ink-2); }
+  .na { color: var(--axis); }
+  .sug { display: inline-block; min-width: 34px; padding: 2px 7px; border-radius: 999px; background: var(--sug-bg); color: var(--sug-ink); font-weight: 700; font-size: 12px; cursor: pointer; }
+  .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <span class="logo">beacon</span>
+    <nav><a href="#">总览</a><a class="active" href="#">渠道矩阵</a><a href="#">待办</a><a href="#">帖子</a></nav>
+  </header>
+  <main>
+    <h1>渠道覆盖矩阵</h1>
+    <p class="lead">项目 × 渠道。数字气泡 = 未覆盖且适配的建议（值为标签适配分，点击标记为已发／计划／不适用）。</p>
+    <div class="legend"><span class="posted">✓ 已发</span><span class="planned">◷ 计划中</span><span><span class="sug">3</span> 建议（适配分）</span><span class="na">— 不适配</span></div>
+    <div class="scroll">
+      <table>
+        <thead>
+          <tr>
+            <th></th>
+            <th>V2EX<span class="lang">中</span></th>
+            <th>LinuxDO<span class="lang">中</span></th>
+            <th>少数派<span class="lang">中</span></th>
+            <th>小众软件<span class="lang">中</span></th>
+            <th>即刻<span class="lang">中</span></th>
+            <th>indienova<span class="lang">中</span></th>
+            <th>itch.io<span class="lang">英</span></th>
+            <th>Show HN<span class="lang">英</span></th>
+            <th>r/selfhosted<span class="lang">英</span></th>
+            <th>r/macapps<span class="lang">英</span></th>
+            <th>Product Hunt<span class="lang">英</span></th>
+            <th>awesome-*<span class="lang">英</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <th>nightide</th>
+            <td class="posted" title="V2EX · 32 回复">✓</td>
+            <td><span class="sug">4</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td><span class="sug">2</span></td>
+            <td><span class="sug">2</span></td>
+            <td><span class="sug">3</span></td>
+            <td><span class="sug">2</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+          </tr>
+          <tr>
+            <th>day-monitor</th>
+            <td><span class="sug">4</span></td>
+            <td><span class="sug">4</span></td>
+            <td><span class="sug">3</span></td>
+            <td><span class="sug">3</span></td>
+            <td><span class="sug">2</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td><span class="sug">3</span></td>
+            <td class="na">—</td>
+            <td><span class="sug">2</span></td>
+            <td><span class="sug">3</span></td>
+            <td class="na">—</td>
+          </tr>
+          <tr>
+            <th>shotsync</th>
+            <td class="posted" title="V2EX · 18 回复">✓</td>
+            <td><span class="sug">4</span></td>
+            <td class="na">—</td>
+            <td><span class="sug">2</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td class="planned" title="计划中">◷</td>
+            <td><span class="sug">2</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td><span class="sug">2</span></td>
+          </tr>
+          <tr>
+            <th>screen-coach</th>
+            <td><span class="sug">4</span></td>
+            <td><span class="sug">4</span></td>
+            <td><span class="sug">3</span></td>
+            <td><span class="sug">3</span></td>
+            <td><span class="sug">3</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+            <td><span class="sug">2</span></td>
+            <td class="na">—</td>
+            <td><span class="sug">2</span></td>
+            <td class="na">—</td>
+            <td class="na">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">建议分 = 项目标签与渠道标签交集数；已覆盖／不适配的组合不再出现在总览的建议行动里。</p>
+  </main>
+</div>
+</body>
+</html>

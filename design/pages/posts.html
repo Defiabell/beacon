@@ -1,0 +1,92 @@
+<!-- @dsCard group="Pages" -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>beacon · 帖子</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .viz-root {
+    --surface-1: #fcfcfb; --page: #f9f9f7;
+    --ink-1: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,.10);
+    --series-1: #2a78d6; --good-text: #006300;
+    background: var(--page); color: var(--ink-1); min-height: 100vh;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+      --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+      --series-1: #3987e5; --good-text: #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    --surface-1: #1a1a19; --page: #0d0d0d; --ink-1: #fff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,.10);
+    --series-1: #3987e5; --good-text: #0ca30c;
+  }
+  header { display: flex; align-items: baseline; gap: 14px; padding: 20px 28px 0; max-width: 1120px; margin: 0 auto; }
+  header .logo { font-size: 20px; font-weight: 700; }
+  header .logo::before { content: "⌂ "; color: var(--series-1); }
+  header nav { display: flex; gap: 18px; font-size: 14px; color: var(--ink-2); margin-left: auto; }
+  header nav a { color: inherit; text-decoration: none; padding-bottom: 2px; }
+  header nav a.active { color: var(--ink-1); font-weight: 600; border-bottom: 2px solid var(--series-1); }
+  main { max-width: 1120px; margin: 0 auto; padding: 20px 28px 40px; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  p.lead { margin: 0 0 16px; font-size: 13px; color: var(--ink-2); }
+  .scroll { overflow-x: auto; background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 4px 18px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; min-width: 860px; }
+  th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 10px 8px 6px 0; border-bottom: 1px solid var(--grid); }
+  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td { padding: 10px 8px 10px 0; border-bottom: 1px solid var(--grid); }
+  tr:last-child td { border-bottom: 0; }
+  td a.title { color: var(--ink-1); text-decoration: none; font-weight: 550; }
+  td a.title:hover { color: var(--series-1); }
+  .platform { font-size: 11px; border: 1px solid var(--border); border-radius: 4px; padding: 1px 6px; color: var(--ink-2); white-space: nowrap; }
+  .proj { font-size: 11.5px; color: var(--series-1); }
+  .live { font-size: 11px; color: var(--muted); }
+  .live .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #0ca30c; margin-right: 4px; vertical-align: 1px; }
+  .add { float: right; font-size: 12.5px; color: var(--series-1); text-decoration: none; }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <header>
+    <span class="logo">beacon</span>
+    <nav><a href="#">总览</a><a href="#">渠道矩阵</a><a href="#">待办</a><a class="active" href="#">帖子</a></nav>
+  </header>
+  <main>
+    <h1>帖子榜单 <a class="add" href="#">＋ 登记帖子</a></h1>
+    <p class="lead"><span class="live"><span class="dot"></span>实时</span> · 打开页面时现场拉取各平台最新数据（缓存 10 分钟），历史快照每日落库。</p>
+    <div class="scroll">
+      <table>
+        <tr><th>帖子</th><th>项目</th><th>平台</th><th class="num">回复</th><th class="num">浏览</th><th class="num">赞/分</th><th>发布</th></tr>
+        <tr>
+          <td><a class="title" href="#">用 AI 结对做了一个网页游戏《夜潮》：对称自动战争＋轮抽构筑…</a></td>
+          <td class="proj">nightide</td><td><span class="platform">V2EX</span></td>
+          <td class="num">32</td><td class="num">—</td><td class="num">—</td><td>07-27</td>
+        </tr>
+        <tr>
+          <td><a class="title" href="#">Show HN: Self-hosted cross-device image drop on Cloudflare free tier</a></td>
+          <td class="proj">shotsync</td><td><span class="platform">HN</span></td>
+          <td class="num">23</td><td class="num">—</td><td class="num">61</td><td>08-01</td>
+        </tr>
+        <tr>
+          <td><a class="title" href="#">做了个自部署的跨设备图片／文字中转池：手机拍完电脑上秒取…</a></td>
+          <td class="proj">shotsync</td><td><span class="platform">V2EX</span></td>
+          <td class="num">18</td><td class="num">—</td><td class="num">—</td><td>08-01</td>
+        </tr>
+        <tr>
+          <td><a class="title" href="#">夜潮：守灯人的长夜——一个人用 AI 做的对称自动战争网页游戏</a></td>
+          <td class="proj">nightide</td><td><span class="platform">LinuxDO</span></td>
+          <td class="num">14</td><td class="num">1.2k</td><td class="num">27</td><td>07-30</td>
+        </tr>
+      </table>
+    </div>
+  </main>
+</div>
+</body>
+</html>
