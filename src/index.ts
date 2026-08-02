@@ -76,7 +76,13 @@ export default {
     try {
       const path = new URL(req.url).pathname;
 
-      if (path.startsWith("/api/admin/")) return handleAdmin(req, env, path);
+      // `await` here is load-bearing, not stylistic: without it, a rejection
+      // inside handleAdmin (e.g. a D1 UNIQUE-constraint error) propagates as
+      // an unhandled rejection on the promise this `return` merely forwards,
+      // bypassing the surrounding try/catch entirely instead of being caught
+      // by it — the catch below only intercepts synchronous throws and
+      // rejections surfaced via `await`.
+      if (path.startsWith("/api/admin/")) return await handleAdmin(req, env, path);
       if (path.startsWith("/api/")) return (await handlePublicApi(req, env, path)) ?? notFound();
 
       return (await routePage(req, env, path)) ?? notFound();
