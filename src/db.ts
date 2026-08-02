@@ -208,6 +208,9 @@ export async function listSourceRuns(db: D1Database): Promise<SourceRun[]> {
   return res.results.map(r => ({ source: r.source, lastRunAt: r.lastRunAt, ok: r.ok === 1, error: r.error }));
 }
 
+// `days` means "the most recent N recorded rows", not "trailing N calendar days" —
+// filtering by wall-clock date would under-return when the daily cron misses a run,
+// so we take the N latest dates present and sort them ascending for charting.
 export async function getRepoSeries(db: D1Database, repo: string, days: number): Promise<RepoDaily[]> {
   const res = await db
     .prepare(
