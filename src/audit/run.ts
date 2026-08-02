@@ -74,19 +74,6 @@ async function fetchOgImage(repo: string, fetchFn: FetchFn): Promise<string | nu
   return match ? match[1] : null;
 }
 
-function extractReadmeLinks(readme: string): string[] {
-  const matches = readme.match(/https?:\/\/[^\s)"'<>]+/g) ?? [];
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const url of matches) {
-    if (seen.has(url)) continue;
-    seen.add(url);
-    result.push(url);
-    if (result.length >= MAX_LINKS_CHECKED) break;
-  }
-  return result;
-}
-
 function isGithubHosted(url: string): boolean {
   try {
     const hostname = new URL(url).hostname;
@@ -97,6 +84,25 @@ function isGithubHosted(url: string): boolean {
   } catch {
     return true; // unparsable URL: skip it rather than risk hammering an arbitrary host
   }
+}
+
+// The github.com exemption is applied here, before the MAX_LINKS_CHECKED
+// truncation — not after. READMEs commonly front-load github.com
+// self-references (badges, Actions/Issues links), and those never need
+// checking; counting them against the 20-link budget would silently push
+// real external links out of the check entirely on a link-heavy README.
+function extractReadmeLinks(readme: string): string[] {
+  const matches = readme.match(/https?:\/\/[^\s)"'<>]+/g) ?? [];
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const url of matches) {
+    if (seen.has(url)) continue;
+    seen.add(url);
+    if (isGithubHosted(url)) continue;
+    result.push(url);
+    if (result.length >= MAX_LINKS_CHECKED) break;
+  }
+  return result;
 }
 
 // Individual link-check network errors count as broken (can't confirm the link
@@ -115,7 +121,7 @@ async function isLinkBroken(url: string, fetchFn: FetchFn): Promise<boolean> {
 }
 
 async function findBrokenLinks(readme: string, fetchFn: FetchFn): Promise<string[]> {
-  const links = extractReadmeLinks(readme).filter(url => !isGithubHosted(url));
+  const links = extractReadmeLinks(readme);
   const checked = await Promise.all(links.map(async url => ({ url, broken: await isLinkBroken(url, fetchFn) })));
   return checked.filter(c => c.broken).map(c => c.url);
 }

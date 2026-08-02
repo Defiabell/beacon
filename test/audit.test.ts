@@ -239,6 +239,29 @@ describe("collectAuditInput", () => {
     expect(input.brokenLinks).toContain("https://evilgithub.com/whatever");
   });
 
+  it("checks a link past the raw 20th position when github.com self-references occupy the earlier positions", async () => {
+    // 22 distinct github.com links (badges/Actions/Issues-style self-references)
+    // followed by one external broken link. In raw match order the external
+    // link sits at position 23 — past the 20-link budget. The github.com
+    // exemption must be applied BEFORE the budget truncation, or these
+    // self-references silently consume the whole budget and the real external
+    // link never gets checked at all.
+    const frontLoadedGithubLinks = Array.from(
+      { length: 22 },
+      (_, i) => `- https://github.com/Defiabell/shotsync/actions/runs/${i}`
+    ).join("\n");
+    const readme = `# shotsync\n\n${frontLoadedGithubLinks}\n- External: https://example.com/broken-past-budget\n`;
+    const base = buildStub();
+    const stub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (url === "https://example.com/broken-past-budget") return new Response("nope", { status: 404 });
+      if (url.endsWith("/readme")) return new Response(readme, { status: 200 });
+      return base(input, init);
+    };
+    const input = await collectAuditInput("tok", project, stub);
+    expect(input.brokenLinks).toEqual(["https://example.com/broken-past-budget"]);
+  });
+
   it("treats a missing README (404) as an empty string, not a thrown error", async () => {
     const base = buildStub();
     const noReadme: typeof fetch = async (input, init) => {
