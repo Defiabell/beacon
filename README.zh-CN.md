@@ -4,8 +4,7 @@
 
 一个属于你的个人项目增长引擎——完全跑在 Cloudflare 免费档。beacon 会盯着每个项目的 GitHub 流量/star 走势和你在各处发过的帖子，告诉你还有哪些渠道没发过，并按一套面向公众的检查清单审计每个仓库的 README/topics/license，把缺的东西直接变成一条待办。
 
-![beacon overview](docs/screenshot.png)
-<!-- TODO: 部署上线后替换成 "/" 总览页的真实截图 -->
+<!-- TODO: 部署上线且有真实数据后，在此加入 ![beacon overview](docs/screenshot.png) -->
 
 ## 这是什么
 

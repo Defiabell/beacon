@@ -4,8 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 A growth engine for your side projects — self-hosted on Cloudflare's free tier. beacon watches GitHub traffic/stars and the posts you've made about a project, tells you which channels you haven't posted to yet, and audits every tracked repo's README/topics/license against a public-facing checklist — then turns whatever's missing into a todo.
 
-![beacon overview](docs/screenshot.png)
-<!-- TODO: replace with a real screenshot of the "/" overview page once deployed -->
+<!-- TODO: add ![beacon overview](docs/screenshot.png) once the "/" overview page is deployed and has real data -->
 
 ## What it is
 
