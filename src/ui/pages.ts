@@ -166,7 +166,9 @@ ${freshnessBar(o.sources)}
 function renderAuditItem(a: CheckResult & { checkedAt: string }): string {
   const cls = a.status === "pass" ? "ok" : a.status === "fail" ? "bad" : "na";
   const label = CHECK_LABELS[a.checkId] ?? a.checkId;
-  return `<li class="${cls}">${esc(label)}<span class="chip">${esc(a.detail)}</span></li>`;
+  // .chip is a bordered pill, so an empty one still renders — only emit it when there is detail.
+  const chip = a.detail ? `<span class="chip">${esc(a.detail)}</span>` : "";
+  return `<li class="${cls}">${esc(label)}${chip}</li>`;
 }
 
 function renderReferrersTable(rows: ReferrerRow[]): string {

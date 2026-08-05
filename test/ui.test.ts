@@ -139,6 +139,20 @@ describe("renderProject", () => {
     expect(html).toContain("polyline");
   });
 
+  it("omits the detail chip entirely when a check has no detail", () => {
+    const noDetail: ProjectDetail = {
+      ...detail,
+      audit: [
+        { checkId: "license", status: "pass", detail: "", priority: 2, checkedAt: "2026-08-01T00:00:00Z" },
+        { checkId: "topics", status: "fail", detail: "0 topic(s)", priority: 1, checkedAt: "2026-08-01T00:00:00Z" }
+      ]
+    };
+    const html = renderProject("nightide", noDetail);
+    // .chip is a bordered pill: an empty one would render as visible noise next to every passing check.
+    expect(html).not.toContain('<span class="chip"></span>');
+    expect(html).toContain('<span class="chip">0 topic(s)</span>');
+  });
+
   it("escapes a malicious referrer value", () => {
     const withXss: ProjectDetail = {
       ...detail,
