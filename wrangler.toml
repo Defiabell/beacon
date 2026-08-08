@@ -17,4 +17,4 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "beacon"
-database_id = "placeholder-replace-after-d1-create"
+database_id = "b1b64387-3398-4df8-b2a1-0a5138997f2b"
