@@ -81,6 +81,19 @@ async function fetchOgImage(repo: string, fetchFn: FetchFn): Promise<string | nu
   return match ? match[1] : null;
 }
 
+// READMEs document deploy targets as templates — "https://shotsync.<subdomain>
+// .workers.dev". The URL match stops at "<", leaving a TLD-less fragment like
+// "https://shotsync" that resolves nowhere and would be reported broken forever.
+// A hostname with no dot is never a real external link (this also drops
+// localhost and intranet names, which are not ours to check either).
+function isCheckableHost(url: string): boolean {
+  try {
+    return new URL(url).hostname.includes(".");
+  } catch {
+    return false;
+  }
+}
+
 function isGithubHosted(url: string): boolean {
   try {
     const hostname = new URL(url).hostname;
@@ -116,6 +129,7 @@ function extractReadmeLinks(readme: string): string[] {
   for (const url of matches) {
     if (seen.has(url)) continue;
     seen.add(url);
+    if (!isCheckableHost(url)) continue;
     if (isGithubHosted(url)) continue;
     result.push(url);
     if (result.length >= MAX_LINKS_CHECKED) break;
@@ -132,7 +146,12 @@ async function isLinkBroken(url: string, fetchFn: FetchFn): Promise<boolean> {
     if (res.status === 405 || res.status === 403) {
       res = await fetchFn(url, { method: "GET" });
     }
-    return res.status >= 400;
+    // Only "this address leads nowhere" counts. A README that cites an API root
+    // (https://api.anthropic.com answers 401 unauthenticated) or a page behind a
+    // login is not carrying a broken link, and a 5xx is the far end having a bad
+    // day rather than the link being wrong — see #11 on retrying those. Every
+    // false positive here becomes a P1 todo, so the bar is deliberately narrow.
+    return res.status === 404 || res.status === 410;
   } catch {
     return true;
   }

@@ -261,6 +261,35 @@ describe("collectAuditInput", () => {
     expect(input.brokenLinks).toEqual([]);
   });
 
+  it("skips template placeholders and treats auth-walled endpoints as reachable", async () => {
+    // Both regressions came from the first production audit run:
+    //  - shotsync's README documents "https://shotsync.<subdomain>.workers.dev";
+    //    the match stops at "<", leaving a TLD-less "https://shotsync".
+    //  - screen-coach's README cites https://api.anthropic.com, which answers
+    //    401 to an unauthenticated probe. The endpoint exists; the link is fine.
+    const project = CONFIG.projects[0];
+    const readme = [
+      "deploy to https://shotsync.<subdomain>.workers.dev",
+      "needs a key from https://api.anthropic.com",
+      "gone: https://example.com/removed"
+    ].join("\n\n");
+    const probed: string[] = [];
+    const stub: typeof fetch = async input => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json([]);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      probed.push(url);
+      if (url === "https://api.anthropic.com") return new Response("", { status: 401 });
+      if (url === "https://example.com/removed") return new Response("", { status: 404 });
+      return new Response("", { status: 200 });
+    };
+    const input = await collectAuditInput("tok", project, stub);
+    expect(probed.some(u => u.startsWith("https://shotsync"))).toBe(false);
+    expect(input.brokenLinks).toEqual(["https://example.com/removed"]);
+  });
+
   it("does not skip a github.com lookalike domain from the broken-link check", async () => {
     const base = buildStub();
     // A minimal README with just the lookalike link — not readmeFixture's full
