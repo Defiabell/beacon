@@ -51,21 +51,39 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
-async function handleCreatePost(req: Request, env: Env, fetchFn: FetchFn): Promise<Response> {
-  const body = await parseJsonBody<CreatePostBody>(req);
-  if (!body) return jsonResponse({ error: "malformed json body" }, 400);
-  if (!isNonEmptyString(body.url)) return missingField("url");
-  if (!isNonEmptyString(body.project)) return missingField("project");
+export interface CreatePostInput {
+  url: unknown;
+  project: unknown;
+  title?: unknown;
+  publishedAt?: unknown;
+}
 
-  const platform = detectPlatform(body.url);
-  if (!platform) return jsonResponse({ error: `could not detect platform for url: ${body.url}` }, 400);
+export type CreatePostResult =
+  | { ok: true; id: number; metricsDeferred: boolean }
+  | { ok: false; error: string; status: number };
+
+// Shared by the JSON admin route (handleCreatePost below) and the no-JS
+// `POST /ui/post` form handler (src/api/ui.ts) — both need the exact same
+// validate -> insert -> best-effort-fetch-metrics sequence, including the
+// metrics-deferred fallback (see the comment on the try/catch below for why
+// that fallback exists). Fields are typed `unknown` rather than the old
+// `CreatePostBody` shape because the two callers get their raw input from
+// different places (a parsed JSON body vs. FormData.get(), which only ever
+// returns string | File | null) with no shared static type to lean on —
+// isNonEmptyString is the real runtime guard either way.
+export async function createPost(env: Env, input: CreatePostInput, fetchFn: FetchFn = fetch): Promise<CreatePostResult> {
+  if (!isNonEmptyString(input.url)) return { ok: false, error: "missing required field: url", status: 400 };
+  if (!isNonEmptyString(input.project)) return { ok: false, error: "missing required field: project", status: 400 };
+
+  const platform = detectPlatform(input.url);
+  if (!platform) return { ok: false, error: `could not detect platform for url: ${input.url}`, status: 400 };
 
   const id = await insertPost(env.DB, {
-    url: body.url,
+    url: input.url,
     platform,
-    project: body.project,
-    title: body.title ?? "",
-    publishedAt: typeof body.publishedAt === "string" ? body.publishedAt : null
+    project: input.project,
+    title: isNonEmptyString(input.title) ? input.title : "",
+    publishedAt: isNonEmptyString(input.publishedAt) ? input.publishedAt : null
   });
 
   // The post row is committed above; posts.url is UNIQUE, so if the metrics fetch
@@ -76,12 +94,21 @@ async function handleCreatePost(req: Request, env: Env, fetchFn: FetchFn): Promi
   // and will backfill today's metrics on its next run, same as for any other post.
   const today = new Date().toISOString().slice(0, 10);
   try {
-    const metrics = await fetchPostMetrics(body.url, platform, fetchFn);
+    const metrics = await fetchPostMetrics(input.url, platform, fetchFn);
     await upsertPostMetrics(env.DB, id, today, metrics);
-    return jsonResponse({ id }, 201);
+    return { ok: true, id, metricsDeferred: false };
   } catch {
-    return jsonResponse({ id, metrics: "deferred" }, 201);
+    return { ok: true, id, metricsDeferred: true };
   }
+}
+
+async function handleCreatePost(req: Request, env: Env, fetchFn: FetchFn): Promise<Response> {
+  const body = await parseJsonBody<CreatePostBody>(req);
+  if (!body) return jsonResponse({ error: "malformed json body" }, 400);
+
+  const result = await createPost(env, body, fetchFn);
+  if (!result.ok) return jsonResponse({ error: result.error }, result.status);
+  return jsonResponse(result.metricsDeferred ? { id: result.id, metrics: "deferred" } : { id: result.id }, 201);
 }
 
 interface PutChannelBody {
