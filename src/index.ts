@@ -13,7 +13,7 @@ const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
 // CRITICAL: an authenticated page renders extra write controls (see
 // src/ui/pages.ts's `authed` parameter) that must never reach an anonymous
 // visitor. This Cache-Control is what a cookie-carrying request gets instead
-// of PUBLIC_CACHE_CONTROL — see fetch()'s cacheablePathAndMethod/adminCookiePresent
+// of PUBLIC_CACHE_CONTROL — see fetch()'s cacheablePathAndMethod/adminCredentialPresent
 // handling below for the other half (skipping the cache read/write entirely).
 const PRIVATE_CACHE_CONTROL = "private, no-store";
 
