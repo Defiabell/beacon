@@ -64,6 +64,24 @@ export function hasAdminCookie(req: Request): boolean {
   return readCookie(req, ADMIN_COOKIE_NAME) !== null;
 }
 
+// Whether the request carries *any* admin credential — the Authorization header
+// or the beacon_admin cookie — regardless of whether it actually validates.
+// src/index.ts uses this (not requireAdmin) to decide cacheability: a request
+// presenting either credential must never have its response read from or
+// written to the shared edge cache. This closes the same gap hasAdminCookie
+// closes for cookies: a Bearer-authenticated `GET /matrix` renders the admin's
+// extra write controls just as much as a cookie-authenticated one does, so on a
+// custom domain with a warm public cache it would otherwise (a) serve that
+// admin the last cached *anonymous* page on a hit, and (b) poison the cache
+// with the authed page on a miss. Presence-only (not validity) for the same
+// reason hasAdminCookie is: running the full timingSafeEqual check on every
+// request just to decide cacheability isn't worth it, and a merely-invalid-but-
+// present credential is still a strong enough signal that this is a privileged
+// request that must not leak into (or read from) the public cache.
+export function hasAdminCredential(req: Request): boolean {
+  return req.headers.has("Authorization") || hasAdminCookie(req);
+}
+
 // Returns a 401 JSON Response when the request is not authorized, or null when
 // it's fine to proceed. Accepts either the `Authorization: Bearer` header (so
 // existing curl-based/API usage keeps working) or the `beacon_admin` cookie (so

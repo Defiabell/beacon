@@ -223,6 +223,57 @@ describe("authenticated (cookie-carrying) responses bypass the shared cache", ()
   });
 });
 
+// Same boundary as the cookie describe block above, for the *other* credential
+// channel: a Bearer-authenticated browser/curl GET renders the same authed
+// controls a cookie-authenticated one does, so it must get exactly the same
+// cache treatment. Coordinator review (2026-08-10) found this gap: `cacheable`
+// excluded the cookie but not `Authorization`, so on a custom domain with a
+// warm cache a Bearer-authenticated `GET /matrix` would (a) be served a stale
+// *anonymous* cached page on a hit, and (b) poison the cache with the authed
+// page on a miss (the only thing stopping (b) in practice was Cloudflare
+// refusing to store a `private, no-store` response — a single-layer defence,
+// not a designed one).
+describe("authenticated (Bearer-header-carrying) responses bypass the shared cache", () => {
+  function bearerReq(path: string, token: string): Request {
+    return new Request(`https://beacon.internal${path}`, { headers: { Authorization: `Bearer ${token}` } });
+  }
+
+  it("a GET with a valid Bearer token gets Cache-Control: private, no-store, and never poisons the cache for the next anonymous visitor", async () => {
+    const authed = await SELF.fetch(bearerReq("/matrix", ADMIN_TOKEN));
+    expect(authed.status).toBe(200);
+    expect(authed.headers.get("Cache-Control")).toBe("private, no-store");
+    await authed.text();
+
+    const anon = await SELF.fetch(req("GET", "/matrix"));
+    expect(anon.status).toBe(200);
+    expect(anon.headers.get("Cache-Control")).toBe("public, max-age=60, s-maxage=600");
+    await anon.text();
+
+    const cached = await caches.default.match(new Request("https://beacon.internal/matrix"));
+    if (cached) expect(cached.headers.get("Cache-Control")).not.toBe("private, no-store");
+  });
+
+  it("still gets no-store with a wrong/garbage Bearer token — the bypass is keyed on the header's presence, not its validity", async () => {
+    const res = await SELF.fetch(bearerReq("/matrix", "not-the-real-admin-token"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    await res.text();
+  });
+
+  it("a stale cached anonymous /matrix response is never served back to a Bearer-authenticated request (no false cache hit)", async () => {
+    // Warm the public cache first.
+    const warm = await SELF.fetch(req("GET", "/matrix"));
+    expect(warm.headers.get("Cache-Control")).toBe("public, max-age=60, s-maxage=600");
+    await warm.text();
+
+    // A Bearer-authenticated request to the same URL must never be answered
+    // from that cache entry — it must always be freshly rendered (private).
+    const authed = await SELF.fetch(bearerReq("/matrix", ADMIN_TOKEN));
+    expect(authed.headers.get("Cache-Control")).toBe("private, no-store");
+    await authed.text();
+  });
+});
+
 describe("XSS via a stored todo title", () => {
   it("the rendered /todos page contains the escaped title, never the raw <script> tag", async () => {
     await env.DB.prepare(

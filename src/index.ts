@@ -7,7 +7,7 @@ import { handleSession } from "./api/session";
 import { handlePublicApi, buildOverview, buildProjectDetail, buildMatrix, buildPostsWithMetrics } from "./api/public";
 import { listTodos } from "./db";
 import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts } from "./ui/pages";
-import { isAuthed, hasAdminCookie } from "./auth";
+import { isAuthed, hasAdminCredential } from "./auth";
 
 const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
 // CRITICAL: an authenticated page renders extra write controls (see
@@ -107,16 +107,26 @@ export default {
       // public.ts's CACHE_CONTROL) applies either way, independent of
       // whether the edge cache itself is active.
       //
-      // CRITICAL: a request carrying the beacon_admin cookie must never have
-      // its response read from or written to this shared cache — an
-      // authenticated page renders extra controls that would otherwise leak
-      // to the next anonymous visitor hitting the same URL (caches.default
-      // keys by URL, not by the Cookie header, since this app sets no Vary).
-      // hasAdminCookie checks presence only (not validity) deliberately — see
-      // its doc comment in src/auth.ts.
-      const adminCookiePresent = hasAdminCookie(req);
-      const cacheablePathAndMethod = req.method === "GET" && !path.startsWith("/api/admin/") && !path.startsWith("/ui/");
-      const cacheable = cacheablePathAndMethod && !adminCookiePresent;
+      // CRITICAL: a request carrying an admin credential — the beacon_admin
+      // cookie OR the Authorization header — must never have its response read
+      // from or written to this shared cache. An authenticated page renders
+      // extra controls that would otherwise leak to the next anonymous visitor
+      // hitting the same URL (caches.default keys by URL, not by the Cookie or
+      // Authorization header, since this app sets no Vary); the same gap
+      // applies to a Bearer-authenticated GET (e.g. curl or a browser using the
+      // header instead of the cookie) as to a cookie-authenticated one — both
+      // render the same authed page. hasAdminCredential checks presence only
+      // (not validity) deliberately — see its doc comment in src/auth.ts.
+      const adminCredentialPresent = hasAdminCredential(req);
+      // /login is also excluded here (not just /api/admin/* and /ui/*): its
+      // response always carries Cache-Control: no-store (src/api/session.ts),
+      // and Cloudflare's Cache API rejects a .put() of a no-store response —
+      // feeding one in would reject the ctx.waitUntil below on every single
+      // anonymous GET /login. /logout never reaches this branch anyway (it's
+      // POST-only).
+      const cacheablePathAndMethod =
+        req.method === "GET" && !path.startsWith("/api/admin/") && !path.startsWith("/ui/") && path !== "/login";
+      const cacheable = cacheablePathAndMethod && !adminCredentialPresent;
 
       if (cacheable) {
         const cached = await caches.default.match(req);
@@ -137,10 +147,10 @@ export default {
       else res = (await routePage(req, env, path)) ?? notFound();
 
       // Exactly the paths that would otherwise have been publicly cacheable
-      // get their Cache-Control overridden to private/no-store here when the
-      // cookie is present — /api/admin/* and /ui/* responses are untouched
-      // (they already never carry a public Cache-Control at all).
-      if (cacheablePathAndMethod && adminCookiePresent) {
+      // get their Cache-Control overridden to private/no-store here when an
+      // admin credential is present — /api/admin/* and /ui/* responses are
+      // untouched (they already never carry a public Cache-Control at all).
+      if (cacheablePathAndMethod && adminCredentialPresent) {
         res.headers.set("Cache-Control", PRIVATE_CACHE_CONTROL);
       }
 

@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   hasAdminCookie,
+  hasAdminCredential,
   isAuthed,
   requireAdmin,
   adminCookieHeader,
@@ -34,6 +35,21 @@ describe("hasAdminCookie", () => {
 
   it("finds the cookie among several, regardless of position", () => {
     expect(hasAdminCookie(reqWithCookie(`a=1; ${ADMIN_COOKIE_NAME}=tok; b=2`))).toBe(true);
+  });
+});
+
+describe("hasAdminCredential", () => {
+  it("true when only the Authorization header is present, regardless of validity", () => {
+    expect(hasAdminCredential(new Request("https://beacon.internal/matrix", { headers: { Authorization: "Bearer garbage" } }))).toBe(true);
+    expect(hasAdminCredential(new Request("https://beacon.internal/matrix", { headers: { Authorization: `Bearer ${ADMIN_TOKEN}` } }))).toBe(true);
+  });
+
+  it("true when only the beacon_admin cookie is present", () => {
+    expect(hasAdminCredential(reqWithCookie(`${ADMIN_COOKIE_NAME}=anything`))).toBe(true);
+  });
+
+  it("false when neither is present", () => {
+    expect(hasAdminCredential(new Request("https://beacon.internal/matrix"))).toBe(false);
   });
 });
 
