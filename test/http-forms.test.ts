@@ -61,4 +61,26 @@ describe("safeRedirectPath", () => {
   it("falls back on a path that doesn't start with /", () => {
     expect(safeRedirectPath("todos", "/fallback")).toBe("/fallback");
   });
+
+  // Coordinator review (2026-08-10): browsers normalize a backslash to a forward
+  // slash per the WHATWG URL spec, so "/\evil.com" — which passes a naive
+  // startsWith("/")/!startsWith("//")/!includes("://") check — becomes the
+  // network-path reference "//evil.com" once actually navigated, landing on
+  // https://evil.com. Not exploitable today (every returnTo is a server-side
+  // constant, and SameSite=Strict blocks cross-site POSTs from ever supplying
+  // one), but rejecting exactly this is the function's only reason to exist.
+  it("falls back on a backslash-prefixed path (browsers normalize \\ to / into a protocol-relative URL)", () => {
+    expect(safeRedirectPath("/\\evil.com", "/fallback")).toBe("/fallback");
+  });
+
+  // Same root cause, different normalization: the WHATWG URL parser strips
+  // ASCII tab/newline from the input before parsing, so "/\t/evil.com" becomes
+  // "//evil.com" too.
+  it("falls back on a path containing a raw tab character (browsers strip it, producing a protocol-relative URL)", () => {
+    expect(safeRedirectPath("/\t/evil.com", "/fallback")).toBe("/fallback");
+  });
+
+  it("still accepts an ordinary path containing a backslash in the middle (not a host-changing normalization)", () => {
+    expect(safeRedirectPath("/a\\b", "/fallback")).toBe("/a\\b");
+  });
 });

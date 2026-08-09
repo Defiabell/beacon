@@ -25,12 +25,37 @@ export function formString(form: FormData, key: string): string | null {
   return typeof v === "string" && v.length > 0 ? v : null;
 }
 
+// Fixed, fake origin (RFC 2606 reserves the .invalid TLD for exactly this) used
+// only to detect whether `raw` — once resolved as a URL reference — would
+// navigate somewhere other than "here". Never used for anything else, and
+// never sent anywhere.
+const REDIRECT_PROBE_ORIGIN = "http://beacon.invalid";
+
 // Guards the `returnTo` hidden field every /ui/* form carries before it's used
 // as a redirect target: only a same-origin relative path is accepted. Blindly
-// trusting a caller-supplied redirect target would be an open-redirect vector
-// (`returnTo=https://evil.example`, or the protocol-relative `returnTo=//evil.example`,
-// which browsers treat as an absolute URL despite having no scheme).
+// trusting a caller-supplied redirect target would be an open-redirect vector —
+// obviously so for `returnTo=https://evil.example` or the protocol-relative
+// `returnTo=//evil.example`, but a naive `startsWith("/") && !startsWith("//")
+// && !includes("://")` check (this function's first version) still misses two
+// real browser-normalization tricks that turn a path *starting* with a single
+// "/" into a network-path reference once actually parsed/navigated:
+//   - `/\evil.com`      — browsers treat "\" as "/" in a URL (WHATWG URL spec),
+//                          so this becomes "//evil.com" -> https://evil.com.
+//   - `/\t/evil.com`    — the URL parser strips ASCII tab/newline from the
+//                          input before parsing, so this also collapses to
+//                          "//evil.com".
+// Resolving `raw` against a fixed synthetic origin and comparing the result's
+// origin back to it catches both (and any other WHATWG-normalization variant
+// of the same trick) in one mechanism, rather than hand-maintaining a
+// blocklist of characters — see test/http-forms.test.ts for both cases plus a
+// same-origin control case (a literal backslash *not* at a host-changing
+// position, e.g. "/a\b", must still be accepted).
 export function safeRedirectPath(raw: string | null, fallback: string): string {
-  if (raw && raw.startsWith("/") && !raw.startsWith("//") && !raw.includes("://")) return raw;
-  return fallback;
+  if (!raw || !raw.startsWith("/")) return fallback;
+  try {
+    if (new URL(raw, REDIRECT_PROBE_ORIGIN).origin !== REDIRECT_PROBE_ORIGIN) return fallback;
+  } catch {
+    return fallback;
+  }
+  return raw;
 }
