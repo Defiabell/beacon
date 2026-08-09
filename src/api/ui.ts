@@ -13,7 +13,7 @@
 import type { Env } from "../types";
 import type { FetchFn } from "../collect/github";
 import { requireAdmin } from "../auth";
-import { setTodoStatus, upsertProjectChannel } from "../db";
+import { setTodoStatus, updateChannelStatus } from "../db";
 import { createPost, type CreatePostInput } from "./admin";
 import { parseForm, formString, safeRedirectPath } from "../http-forms";
 
@@ -77,7 +77,10 @@ async function handleUiChannel(req: Request, env: Env): Promise<Response> {
   if (!channelId) return badRequest("missing required field: channelId");
   if (!status || !CHANNEL_STATUSES.has(status)) return badRequest("missing or invalid field: status");
 
-  await upsertProjectChannel(env.DB, project, channelId, status as "posted" | "planned" | "na", null);
+  // updateChannelStatus (not upsertProjectChannel): this form has no field to
+  // supply a postId, so it must not clobber one an earlier JSON-admin-API call
+  // set (see updateChannelStatus's doc comment in src/db.ts).
+  await updateChannelStatus(env.DB, project, channelId, status as "posted" | "planned" | "na");
 
   return seeOther(safeRedirectPath(formString(form, "returnTo"), "/matrix"));
 }

@@ -46,4 +46,28 @@ describe("db", () => {
     const series = await db.getRepoSeries(DB, "Defiabell/days-limit", 2);
     expect(series.map(s => s.date)).toEqual(["2026-07-31", "2026-08-01"]);
   });
+
+  // Coordinator review (2026-08-10): the /ui/channel matrix form (src/api/ui.ts)
+  // has no way to supply a postId (only the JSON admin API's PUT /api/admin/channels
+  // does), so it must never overwrite one that's already there — unlike
+  // upsertProjectChannel, which unconditionally sets post_id to whatever it's
+  // given (including null), by design, for the JSON API's own contract.
+  describe("updateChannelStatus", () => {
+    it("creates a fresh row with post_id null when none existed", async () => {
+      await db.updateChannelStatus(DB, "nightide", "new-channel", "planned");
+      const row2 = await DB.prepare("select status, post_id as postId from project_channels where project=?1 and channel_id=?2")
+        .bind("nightide", "new-channel")
+        .first<{ status: string; postId: number | null }>();
+      expect(row2).toEqual({ status: "planned", postId: null });
+    });
+
+    it("updates only status, preserving an existing post_id set via the JSON admin path", async () => {
+      await db.upsertProjectChannel(DB, "nightide", "v2ex", "posted", 42);
+      await db.updateChannelStatus(DB, "nightide", "v2ex", "planned");
+      const row2 = await DB.prepare("select status, post_id as postId from project_channels where project=?1 and channel_id=?2")
+        .bind("nightide", "v2ex")
+        .first<{ status: string; postId: number | null }>();
+      expect(row2).toEqual({ status: "planned", postId: 42 });
+    });
+  });
 });

@@ -261,6 +261,31 @@ export async function upsertProjectChannel(
     .run();
 }
 
+// Status-only counterpart to upsertProjectChannel, used by the /ui/channel
+// matrix-cell form (src/api/ui.ts): that form has no field to supply a
+// postId (only the JSON admin API's PUT /api/admin/channels does), so it must
+// never clobber a post_id link a previous JSON-API call already set — unlike
+// upsertProjectChannel, whose contract is to unconditionally set post_id to
+// whatever it's given (including null) on every call. A brand-new row still
+// gets post_id NULL (there's nothing to preserve yet); the UPDATE branch
+// simply omits post_id from its SET clause so SQLite leaves it untouched.
+export async function updateChannelStatus(
+  db: D1Database,
+  project: string,
+  channelId: string,
+  status: "posted" | "planned" | "na"
+): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO project_channels (project, channel_id, status, post_id, updated_at)
+       VALUES (?1,?2,?3,NULL, datetime('now'))
+       ON CONFLICT (project, channel_id) DO UPDATE SET
+         status=excluded.status, updated_at=excluded.updated_at`
+    )
+    .bind(project, channelId, status)
+    .run();
+}
+
 export async function listProjectChannels(
   db: D1Database
 ): Promise<{ project: string; channelId: string; status: string; postId: number | null }[]> {

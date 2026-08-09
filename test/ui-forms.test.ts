@@ -176,6 +176,30 @@ describe("POST /ui/channel", () => {
     expect(row).toEqual({ status: "planned", postId: null });
   });
 
+  // Coordinator review (2026-08-10): a cell whose post_id was already linked
+  // through the JSON admin API must not silently lose that link the first time
+  // the admin changes its status from the matrix UI — the form has no field to
+  // supply a postId at all, so a naive upsert-with-null would clobber it.
+  it("changing status from the matrix UI preserves a post_id already linked via the JSON admin API", async () => {
+    await env.DB.prepare(
+      `insert into project_channels (project, channel_id, status, post_id, updated_at) values (?1,?2,?3,?4, datetime('now'))`
+    )
+      .bind("nightide", "ui-preserve-postid", "posted", 99)
+      .run();
+
+    const res = await handleUi(
+      formReq("POST", "/ui/channel", { project: "nightide", channelId: "ui-preserve-postid", status: "planned" }, { token: ADMIN_TOKEN }),
+      env,
+      "/ui/channel"
+    );
+    expect(res.status).toBe(303);
+
+    const row = await env.DB.prepare("select status, post_id as postId from project_channels where project=?1 and channel_id=?2")
+      .bind("nightide", "ui-preserve-postid")
+      .first<{ status: string; postId: number | null }>();
+    expect(row).toEqual({ status: "planned", postId: 99 });
+  });
+
   it("400s on a missing status", async () => {
     const res = await handleUi(
       formReq("POST", "/ui/channel", { project: "nightide", channelId: "v2ex" }, { token: ADMIN_TOKEN }),
