@@ -14,7 +14,7 @@ beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织
 - **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 9 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 
-整个系统跑在一个 Worker 里：一个公开、无需鉴权的 SSR dashboard（`/`、`/p/:project`、`/matrix`、`/todos`、`/posts`），加一个用 Bearer token 保护的写入用 admin API（`/api/admin/*`）。除 `/api/admin/*` 外，所有 GET 响应都会经过 Workers Cache API——在自定义域名下（非裸 `workers.dev` 子域）会带来真正的边缘缓存，叠加在 `max-age=60` 的浏览器缓存之上。
+整个系统跑在一个 Worker 里：一个谁都能看的公开 SSR dashboard（`/`、`/p/:project`、`/matrix`、`/todos`、`/posts`），加同一套用 `ADMIN_TOKEN` 保护的写入路径的两种入口——给 curl/脚本用的 JSON admin API（`/api/admin/*`），以及在浏览器 `/login` 登录后，dashboard 页面本身出现的真实控件（复选框、每格状态选择器、登记帖子表单——见下方"浏览器登录"一节）。除 `/api/admin/*`、`/ui/*`、`/login` 外，所有 GET 响应都会经过 Workers Cache API——在自定义域名下（非裸 `workers.dev` 子域）会带来真正的边缘缓存，叠加在 `max-age=60` 的浏览器缓存之上；已登录的请求永远跳过这个缓存，拿到的是现算的私有渲染。
 
 ## 自己部署（约 5 分钟）
 
@@ -93,9 +93,21 @@ npx wrangler secret put GOATCOUNTER_TOKEN   # GoatCounter → Settings → API �
 
 嵌入到你自己站点的埋点片段、以及如何验证它在发送数据，见 [`docs/goatcounter.md`](docs/goatcounter.md)。
 
+## 浏览器登录
+
+`https://beacon.<你的子域>.workers.dev/login`——一个密码输入框。填入上面生成的**同一个 `ADMIN_TOKEN`**（只有这一个 token；它对 curl 的 `Authorization: Bearer` 头和浏览器的 cookie 是同一套验证逻辑）。令牌错误会在原页面重新渲染表单并返回 `401`；正确则会种下一个 `HttpOnly; Secure; SameSite=Strict` 的 cookie（`beacon_admin`，90 天有效期），并跳转回 `/`。
+
+登录后，每个 dashboard 页面都会长出真正的写入控件——不需要跳去另一个后台页面：
+
+- `/todos` —— 每一行一个真实的复选框（提交即在进行中/已完成之间切换）
+- `/matrix` —— 每个格子变成一个小表单，用来设置已发布 / 计划中 / 不适用
+- `/posts` —— 一个"＋ 登记帖子"折叠面板，用来登记新帖子（url、项目、可选的标题/发布时间）——走的是和 `POST /api/admin/posts` 完全一样的代码路径，包括它的 metrics-deferred 兜底逻辑
+
+这些都是纯 `<form method="post">` 提交（项目里没有任何 JavaScript），分别打到 `POST /ui/todo`、`/ui/post`、`/ui/channel`——这几个薄封装要求和 `/api/admin/*` 完全一样的 `ADMIN_TOKEN`（header 或 cookie 均可），调用的也是同一批底层函数，处理完再跳转回你操作前所在的页面。登出状态下每个页面和上面描述的完全一样，只是页头多一个"登录"链接；登录后这个链接变成"登出"，点一下即 `POST /logout` 清掉 cookie。
+
 ## Admin API
 
-所有 `/api/admin/*` 路由都需要 `Authorization: Bearer <ADMIN_TOKEN>`。
+所有 `/api/admin/*` 路由（以及上面浏览器控件背后的每个 `/ui/*` 路由）都需要 `Authorization: Bearer <ADMIN_TOKEN>`——`/ui/*` 也可以改用 `/login` 种下的 `beacon_admin` cookie，效果相同。
 
 **登记一篇你发布的帖子** —— 会立即尝试拉取指标；如果对应平台一时抽风，帖子依然会被保存，下一次采集会自动补上：
 

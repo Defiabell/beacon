@@ -14,7 +14,7 @@ beacon is a single **Cloudflare Worker + D1 database**, organized around three l
 - **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 9 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced), and a channel-coverage matrix (`src/channels.ts`) scores each project against 17 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
 - **Act** — every failed audit check and every high-scoring unposted channel becomes a row in `todos`, surfaced on the dashboard and via `/api/todos` — a concrete next action instead of just a report.
 
-Everything is served by one Worker: a public, unauthenticated SSR dashboard (`/`, `/p/:project`, `/matrix`, `/todos`, `/posts`) plus a Bearer-token-gated admin API for writes (`/api/admin/*`). Every GET response outside `/api/admin/*` also goes through the Workers Cache API — on a custom domain (not a bare `workers.dev` subdomain) this gives true edge caching in addition to the `max-age=60` browser cache.
+Everything is served by one Worker: a public SSR dashboard (`/`, `/p/:project`, `/matrix`, `/todos`, `/posts`) that anyone can read, plus the same `ADMIN_TOKEN`-gated write path exposed two ways — a JSON admin API for curl/scripts (`/api/admin/*`) and, once you log in at `/login` in a browser, real controls on the dashboard pages themselves (checkboxes, per-cell status pickers, a post-registration form — see "Browser login" below). Every GET response outside `/api/admin/*`, `/ui/*`, and `/login` also goes through the Workers Cache API — on a custom domain (not a bare `workers.dev` subdomain) this gives true edge caching in addition to the `max-age=60` browser cache; a logged-in request always skips that cache and gets a fresh, private render instead.
 
 ## Deploy your own (~5 min)
 
@@ -98,9 +98,21 @@ Leave both unset and the daily "goatcounter" collector step simply reports `{ok:
 
 See [`docs/goatcounter.md`](docs/goatcounter.md) for the tracking snippet to embed on your own sites and how to verify it's sending hits.
 
+## Browser login
+
+`https://beacon.<subdomain>.workers.dev/login` — one password field. Enter the **same `ADMIN_TOKEN`** you generated above (there's only one token; it authenticates curl's `Authorization: Bearer` header and the browser's cookie identically). A wrong token re-renders the form with an error at `401`; a correct one sets an `HttpOnly; Secure; SameSite=Strict` cookie (`beacon_admin`, 90-day expiry) and redirects you to `/`.
+
+Logged in, every dashboard page grows real write controls — no separate admin UI to navigate to:
+
+- `/todos` — a real checkbox per row (submitting toggles open ↔ done)
+- `/matrix` — each cell becomes a small form to set posted / planned / na
+- `/posts` — a "＋ 登记帖子" panel to register a new post (url, project, optional title/publishedAt) — the same code path `POST /api/admin/posts` uses, including its metrics-deferred fallback
+
+These are plain `<form method="post">` submissions (no JavaScript anywhere in the project) hitting `POST /ui/todo`, `/ui/post`, `/ui/channel` — thin wrappers that require the exact same `ADMIN_TOKEN` (header or cookie) as `/api/admin/*` and call the same underlying functions, then redirect back to the page you were on. Logged out, every page renders exactly as described above, plus a small "登录" (login) link in the header; logged in, that link becomes "登出" (logout), a one-click `POST /logout` that clears the cookie.
+
 ## Admin API
 
-Every `/api/admin/*` route requires `Authorization: Bearer <ADMIN_TOKEN>`.
+Every `/api/admin/*` route (and every `/ui/*` route backing the browser controls above) requires `Authorization: Bearer <ADMIN_TOKEN>` — or, for `/ui/*` specifically, the `beacon_admin` cookie set by `/login` works just as well.
 
 **Register a post you published** — metrics are fetched immediately when possible; if the platform hiccups, the post is still saved and picked up by the next collection:
 
