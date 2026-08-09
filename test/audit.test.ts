@@ -290,6 +290,34 @@ describe("collectAuditInput", () => {
     expect(input.brokenLinks).toEqual(["https://example.com/removed"]);
   });
 
+  it("does not check URLs that only appear inside code blocks or code spans", async () => {
+    // screen-coach's README documents `base_url="https://api.anthropic.com"`.
+    // That root really does answer 404 (the API lives at /v1/messages), so the
+    // check was right and the conclusion was wrong: a URL inside code is a value
+    // being shown, not a link a reader can follow.
+    const project = CONFIG.projects[0];
+    const readme = [
+      "Set `base_url=\"https://api.anthropic.com\"` before running it.",
+      "```bash",
+      "curl https://api.example.com/v1/things",
+      "```",
+      "Full docs: https://example.com/guide"
+    ].join("\n\n");
+    const probed: string[] = [];
+    const stub: typeof fetch = async input => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json([]);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      probed.push(url);
+      return new Response("", { status: 404 });
+    };
+    const input = await collectAuditInput("tok", project, stub);
+    expect(probed).toEqual(["https://example.com/guide"]);
+    expect(input.brokenLinks).toEqual(["https://example.com/guide"]);
+  });
+
   it("does not skip a github.com lookalike domain from the broken-link check", async () => {
     const base = buildStub();
     // A minimal README with just the lookalike link — not readmeFixture's full

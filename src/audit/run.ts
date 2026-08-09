@@ -120,8 +120,20 @@ function trimUrlTail(url: string): string {
   return url.replace(/[*_~`.,;:!?\]}]+$/, "");
 }
 
+// A URL inside a fenced block or a code span is a value being displayed — a
+// curl example, a base_url setting — not a link anyone can follow, and its
+// status says nothing about the README's quality. (screen-coach documents
+// `base_url="https://api.anthropic.com"`; that root answers 404 because the API
+// lives at /v1/messages, which made the check right and its conclusion wrong.)
+function stripCode(markdown: string): string {
+  return markdown
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/~~~[\s\S]*?~~~/g, " ")
+    .replace(/`[^`\n]*`/g, " ");
+}
+
 function extractReadmeLinks(readme: string): string[] {
-  const matches = (readme.match(/https?:\/\/[^\s)"'<>]+/g) ?? [])
+  const matches = (stripCode(readme).match(/https?:\/\/[^\s)"'<>]+/g) ?? [])
     .map(trimUrlTail)
     .filter(u => /^https?:\/\/[^/]+/.test(u));
   const seen = new Set<string>();
