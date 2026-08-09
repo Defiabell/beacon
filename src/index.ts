@@ -2,16 +2,25 @@ import { runDailyCollect } from "./collect/run";
 import type { SourceName } from "./collect/run";
 import type { Env } from "./types";
 import { handleAdmin } from "./api/admin";
+import { handleUi } from "./api/ui";
+import { handleSession } from "./api/session";
 import { handlePublicApi, buildOverview, buildProjectDetail, buildMatrix, buildPostsWithMetrics } from "./api/public";
 import { listTodos } from "./db";
 import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts } from "./ui/pages";
+import { isAuthed, hasAdminCookie } from "./auth";
 
-const HTML_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
+const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
+// CRITICAL: an authenticated page renders extra write controls (see
+// src/ui/pages.ts's `authed` parameter) that must never reach an anonymous
+// visitor. This Cache-Control is what a cookie-carrying request gets instead
+// of PUBLIC_CACHE_CONTROL — see fetch()'s cacheablePathAndMethod/adminCookiePresent
+// handling below for the other half (skipping the cache read/write entirely).
+const PRIVATE_CACHE_CONTROL = "private, no-store";
 
-function htmlOk(body: string): Response {
+function htmlOk(body: string, cacheControl: string): Response {
   return new Response(body, {
     status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": HTML_CACHE_CONTROL }
+    headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": cacheControl }
   });
 }
 
@@ -49,7 +58,10 @@ function decodeSegment(raw: string): string | null {
 async function routePage(req: Request, env: Env, path: string): Promise<Response | null> {
   if (req.method !== "GET") return null;
 
-  if (path === "/") return htmlOk(renderOverview(await buildOverview(env)));
+  const authed = isAuthed(req, env);
+  const cacheControl = authed ? PRIVATE_CACHE_CONTROL : PUBLIC_CACHE_CONTROL;
+
+  if (path === "/") return htmlOk(renderOverview(await buildOverview(env), authed), cacheControl);
 
   const projectMatch = path.match(PROJECT_PAGE_PATH);
   if (projectMatch) {
@@ -57,17 +69,19 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
     if (name === null) return notFound();
     const detail = await buildProjectDetail(env, name);
     if (!detail) return notFound();
-    return htmlOk(renderProject(name, detail));
+    return htmlOk(renderProject(name, detail, authed), cacheControl);
   }
 
-  if (path === "/matrix") return htmlOk(renderMatrix(await buildMatrix(env)));
+  if (path === "/matrix") return htmlOk(renderMatrix(await buildMatrix(env), authed), cacheControl);
 
   if (path === "/todos") {
+    const url = new URL(req.url);
+    const filter = url.searchParams.get("status") === "done" ? "done" : undefined;
     const [open, done] = await Promise.all([listTodos(env.DB, "open"), listTodos(env.DB, "done")]);
-    return htmlOk(renderTodos([...open, ...done]));
+    return htmlOk(renderTodos([...open, ...done], authed, filter), cacheControl);
   }
 
-  if (path === "/posts") return htmlOk(renderPosts(await buildPostsWithMetrics(env)));
+  if (path === "/posts") return htmlOk(renderPosts(await buildPostsWithMetrics(env), authed), cacheControl);
 
   return null;
 }
@@ -84,15 +98,26 @@ export default {
       const path = new URL(req.url).pathname;
 
       // Edge caching via the Cache API: only for GET on public paths — never
-      // /api/admin/* (writes, and reads would leak nothing public anyway but
-      // the prefix is excluded on principle) and never a non-2xx response.
-      // On workers.dev this API is inert (every request still runs the full
-      // handler below); on a custom domain it gives true edge caching, so a
-      // repeat hit within the Cache-Control window skips D1 entirely. The
-      // browser-facing `max-age=60` (HTML_CACHE_CONTROL / public.ts's
-      // CACHE_CONTROL) applies either way, independent of whether the edge
-      // cache itself is active.
-      const cacheable = req.method === "GET" && !path.startsWith("/api/admin/");
+      // /api/admin/* or /ui/* (writes, and reads would leak nothing public
+      // anyway but the prefix is excluded on principle) and never a non-2xx
+      // response. On workers.dev this API is inert (every request still runs
+      // the full handler below); on a custom domain it gives true edge
+      // caching, so a repeat hit within the Cache-Control window skips D1
+      // entirely. The browser-facing `max-age=60` (PUBLIC_CACHE_CONTROL /
+      // public.ts's CACHE_CONTROL) applies either way, independent of
+      // whether the edge cache itself is active.
+      //
+      // CRITICAL: a request carrying the beacon_admin cookie must never have
+      // its response read from or written to this shared cache — an
+      // authenticated page renders extra controls that would otherwise leak
+      // to the next anonymous visitor hitting the same URL (caches.default
+      // keys by URL, not by the Cookie header, since this app sets no Vary).
+      // hasAdminCookie checks presence only (not validity) deliberately — see
+      // its doc comment in src/auth.ts.
+      const adminCookiePresent = hasAdminCookie(req);
+      const cacheablePathAndMethod = req.method === "GET" && !path.startsWith("/api/admin/") && !path.startsWith("/ui/");
+      const cacheable = cacheablePathAndMethod && !adminCookiePresent;
+
       if (cacheable) {
         const cached = await caches.default.match(req);
         if (cached) return cached;
@@ -106,8 +131,18 @@ export default {
       // by it — the catch below only intercepts synchronous throws and
       // rejections surfaced via `await`.
       if (path.startsWith("/api/admin/")) res = await handleAdmin(req, env, path);
+      else if (path.startsWith("/ui/")) res = await handleUi(req, env, path);
+      else if (path === "/login" || path === "/logout") res = (await handleSession(req, env, path)) ?? notFound();
       else if (path.startsWith("/api/")) res = (await handlePublicApi(req, env, path)) ?? notFound();
       else res = (await routePage(req, env, path)) ?? notFound();
+
+      // Exactly the paths that would otherwise have been publicly cacheable
+      // get their Cache-Control overridden to private/no-store here when the
+      // cookie is present — /api/admin/* and /ui/* responses are untouched
+      // (they already never carry a public Cache-Control at all).
+      if (cacheablePathAndMethod && adminCookiePresent) {
+        res.headers.set("Cache-Control", PRIVATE_CACHE_CONTROL);
+      }
 
       if (cacheable && res.status === 200) {
         ctx.waitUntil(caches.default.put(req, res.clone()));

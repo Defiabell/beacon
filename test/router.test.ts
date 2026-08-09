@@ -180,6 +180,49 @@ describe("top-level try/catch actually catches admin-branch rejections", () => {
   });
 });
 
+describe("authenticated (cookie-carrying) responses bypass the shared cache", () => {
+  function authedReq(path: string, cookieValue: string): Request {
+    return new Request(`https://beacon.internal${path}`, { headers: { Cookie: `beacon_admin=${cookieValue}` } });
+  }
+
+  it("a GET with a valid beacon_admin cookie gets Cache-Control: private, no-store, and never poisons the cache for the next anonymous visitor", async () => {
+    const authed = await SELF.fetch(authedReq("/matrix", ADMIN_TOKEN));
+    expect(authed.status).toBe(200);
+    expect(authed.headers.get("Cache-Control")).toBe("private, no-store");
+    await authed.text();
+
+    // If the authed response above had been written to the shared edge cache
+    // (caches.default keys by URL — it does not vary by the Cookie header, since
+    // this app never sets a Vary response header), this immediately-following
+    // anonymous request to the exact same URL would be served that cached
+    // "private, no-store" response instead of a freshly computed public one.
+    const anon = await SELF.fetch(req("GET", "/matrix"));
+    expect(anon.status).toBe(200);
+    expect(anon.headers.get("Cache-Control")).toBe("public, max-age=60, s-maxage=600");
+    await anon.text();
+
+    // Best-effort direct introspection: whatever (if anything) is sitting in the
+    // cache for this URL right now must not be the private/no-store response —
+    // i.e. the authed request's .put() never happened.
+    const cached = await caches.default.match(new Request("https://beacon.internal/matrix"));
+    if (cached) expect(cached.headers.get("Cache-Control")).not.toBe("private, no-store");
+  });
+
+  it("still gets no-store with a wrong/garbage cookie value — the bypass is keyed on the cookie's presence, not its validity", async () => {
+    const res = await SELF.fetch(authedReq("/matrix", "not-the-real-admin-token"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("private, no-store");
+    await res.text();
+  });
+
+  it("a plain anonymous GET (no cookie at all) is unaffected: still gets the public Cache-Control", async () => {
+    const res = await SELF.fetch(req("GET", "/"));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Cache-Control")).toBe("public, max-age=60, s-maxage=600");
+    await res.text();
+  });
+});
+
 describe("XSS via a stored todo title", () => {
   it("the rendered /todos page contains the escaped title, never the raw <script> tag", async () => {
     await env.DB.prepare(
