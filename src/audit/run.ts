@@ -98,8 +98,19 @@ function isGithubHosted(url: string): boolean {
 // self-references (badges, Actions/Issues links), and those never need
 // checking; counting them against the link-check budget (MAX_LINKS_CHECKED) would silently push
 // real external links out of the check entirely on a link-heavy README.
+// A bare URL in markdown often butts up against emphasis or sentence
+// punctuation — "**play: https://example.com/**", "see https://example.com/x."
+// — and those characters belong to the prose, not the link. Left attached they
+// turn a working page into a phantom broken link, and every audit run mints a
+// P1 todo for it. A trailing slash is kept: that one really is part of the URL.
+function trimUrlTail(url: string): string {
+  return url.replace(/[*_~`.,;:!?\]}]+$/, "");
+}
+
 function extractReadmeLinks(readme: string): string[] {
-  const matches = readme.match(/https?:\/\/[^\s)"'<>]+/g) ?? [];
+  const matches = (readme.match(/https?:\/\/[^\s)"'<>]+/g) ?? [])
+    .map(trimUrlTail)
+    .filter(u => /^https?:\/\/[^/]+/.test(u));
   const seen = new Set<string>();
   const result: string[] = [];
   for (const url of matches) {

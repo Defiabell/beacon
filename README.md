@@ -40,9 +40,14 @@ npx wrangler d1 migrations apply beacon --remote
 #    - Contents: Read-only        (README and releases — basic repo metadata like
 #      description/topics/license is covered by every token's built-in, non-optional
 #      Metadata:Read permission)
-# Star history backfill (GitHub's stargazers API) needs no extra permission for a
-# public repo — it's unauthenticated-readable; the token here just lifts you out of
-# the much lower unauthenticated rate limit.
+# Star history backfill (POST /api/admin/backfill) is the one thing these two
+# permissions do NOT cover. Measured against a real repo: the stargazers list
+# returns 401 unauthenticated ("Requires authentication") and 403 to a
+# fine-grained token carrying only the two permissions above ("Resource not
+# accessible by personal access token"); a classic token with the `repo` scope
+# returns 200. Daily collection is unaffected — the star count it records comes
+# from the repo metadata endpoint, not the stargazers list — so backfill is
+# optional, and only worth arranging once a repo actually has stars to recover.
 npx wrangler secret put GITHUB_TOKEN
 
 # 4. set the admin token — any long random string; it gates every /api/admin/* write

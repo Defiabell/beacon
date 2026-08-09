@@ -39,8 +39,11 @@ npx wrangler d1 migrations apply beacon --remote
 #      只对拥有该仓库 push/admin 级别权限的 token 开放）
 #    - Contents: Read-only       （README、releases——description/topics/license 这类基础仓库
 #      元信息由每个 token 都自带、无法关闭的 Metadata:Read 权限覆盖）
-# star 历史回填（GitHub stargazers API）对公开仓库不需要额外权限——该接口本身无需鉴权即可读，
-# 这里配 token 只是把你从更低的未鉴权速率限制里解放出来。
+# star 历史回填（POST /api/admin/backfill）是上面两个权限唯一覆盖不到的东西。对真实仓库
+# 实测：stargazers 列表接口匿名访问返回 401（Requires authentication），只带上面两个权限的
+# fine-grained token 返回 403（Resource not accessible by personal access token），
+# 带 repo scope 的 classic token 返回 200。日常采集不受影响——它记录的 star 数取自仓库元信息
+# 接口而不是 stargazers 列表——所以回填是可选项，等仓库真的有 star 需要追溯时再安排即可。
 npx wrangler secret put GITHUB_TOKEN
 
 # 4. 设置 admin token —— 任意长随机串；它保护所有 /api/admin/* 写操作

@@ -232,6 +232,35 @@ describe("collectAuditInput", () => {
     expect(input.brokenLinks.some(u => u.includes("github.com"))).toBe(false);
   });
 
+  it("does not treat trailing markdown emphasis as part of a bare URL", async () => {
+    // Real-world regression (nightide README): "**\u25b6 \u5728\u7ebf\u6e38\u73a9: https://example.com/play/**"
+    // The closing "**" belongs to the bold span, not the link — swallowing it
+    // turned a working page into a phantom P1 "broken link" todo.
+    const project = CONFIG.projects[0];
+    const readme = "**play now: https://example.com/play/**\n\nsee https://example.com/docs. And https://example.com/x, too.\n";
+    const seen: string[] = [];
+    const stub: typeof fetch = async (input, init) => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json([]);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      if (url.startsWith("https://example.com/")) {
+        if (init?.method === "HEAD" || !init) seen.push(url);
+        // Only the exact, punctuation-free URLs exist.
+        const ok = ["https://example.com/play/", "https://example.com/docs", "https://example.com/x"];
+        return new Response("", { status: ok.includes(url) ? 200 : 404 });
+      }
+      return new Response("not found", { status: 404 });
+    };
+    const input = await collectAuditInput("tok", project, stub);
+    expect(seen).toContain("https://example.com/play/");
+    expect(seen.some(u => u.includes("*"))).toBe(false);
+    expect(seen.some(u => u.endsWith("."))).toBe(false);
+    expect(seen.some(u => u.endsWith(","))).toBe(false);
+    expect(input.brokenLinks).toEqual([]);
+  });
+
   it("does not skip a github.com lookalike domain from the broken-link check", async () => {
     const base = buildStub();
     // A minimal README with just the lookalike link — not readmeFixture's full
