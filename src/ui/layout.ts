@@ -142,12 +142,34 @@ ul.audit li:last-child { border-bottom: 0; }
 .sug { display: inline-block; min-width: 34px; padding: 2px 7px; border-radius: 999px; background: var(--sug-bg); color: var(--sug-ink); font-weight: 700; font-size: 12px; }
 .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }
 .filters { display: flex; gap: 8px; margin-bottom: 14px; font-size: 12.5px; }
-.filters button { font: inherit; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-2); border-radius: 999px; padding: 3px 12px; }
-.filters button.on { color: var(--ink-1); font-weight: 600; border-color: var(--series-1); }
+.filters a, .filters button { font: inherit; text-decoration: none; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-2); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
+.filters a.on, .filters button.on { color: var(--ink-1); font-weight: 600; border-color: var(--series-1); }
 li.done { color: var(--muted); } li.done .title { text-decoration: line-through; }
 li.done .effect { margin-left: auto; font-size: 12px; color: var(--good-text); white-space: nowrap; }
 .sec-cap { font-size: 12px; color: var(--muted); font-weight: 600; margin: 14px 0 4px; }
 .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--series-1); flex: 0 0 auto; }
+/* A <form> wrapping controls that must lay out as if the form tag weren't
+   there at all — e.g. a todo row's checkbox+button inside a flex <li>, or a
+   matrix cell's <select>+button inside a centered <td>. display:contents
+   removes the form's own box from layout entirely, letting its children
+   participate directly in the parent's flex/grid, matching the exact
+   layout the equivalent non-form (disabled/static) markup already had. */
+form.blend { display: contents; }
+button.go, button.navlink { border: 0; background: none; padding: 0; font: inherit; cursor: pointer; }
+button.go { color: var(--series-1); }
+header nav button.navlink { color: inherit; padding-bottom: 2px; }
+.cell-select { font: inherit; font-size: 11px; padding: 1px 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-1); color: var(--ink-1); max-width: 96px; }
+.cell-go { font: inherit; font-size: 11px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-1); color: var(--ink-2); cursor: pointer; padding: 1px 5px; margin-left: 3px; }
+.card-form { display: flex; flex-direction: column; gap: 8px; max-width: 360px; margin-top: 4px; }
+.card-form label { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.card-form input, .card-form select { font: inherit; font-size: 13.5px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--page); color: var(--ink-1); }
+button.primary { font: inherit; font-size: 13.5px; padding: 6px 14px; border: none; border-radius: 6px; background: var(--series-1); color: #fff; cursor: pointer; align-self: flex-start; margin-top: 4px; }
+.error-text { color: var(--fail); font-size: 13px; margin: 0 0 12px; }
+details.add-post { margin-bottom: 16px; }
+details.add-post summary { cursor: pointer; font-weight: 600; color: var(--series-1); list-style: none; }
+details.add-post summary::-webkit-details-marker { display: none; }
+details.add-post[open] summary { margin-bottom: 4px; }
 `;
 
 // Full HTML document shell: doctype, head (charset/viewport/title/inline

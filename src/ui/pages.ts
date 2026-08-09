@@ -33,17 +33,31 @@ function sourceLabel(s: string): string {
   return SOURCE_LABELS[s] ?? s;
 }
 
+// Login/logout affordance shared by every page's header (navHeader below, and
+// renderProject's own simpler header). Logged out: a plain GET link to the
+// login form. Logged in: a POST /logout form — logout is a state change (it
+// clears a cookie), so per the project's no-JS/forms-only rule it must be a
+// real form submission, not a GET link; `form.blend` (src/ui/layout.ts) makes
+// it lay out as if it were just the <button> itself, so it sits inline with
+// the other nav <a> links.
+function authLink(authed: boolean): string {
+  return authed
+    ? `<form method="post" action="/logout" class="blend"><button type="submit" class="navlink">登出</button></form>`
+    : `<a href="/login">登录</a>`;
+}
+
 // Shared header/nav. Nav links + active-page highlighting are identical
 // across overview/matrix/todos/posts; the project detail page uses a
 // simpler "← 返回总览" nav instead (matches design/pages/project.html), so it
 // builds its own header rather than calling this.
-function navHeader(active: NavKey): string {
+function navHeader(active: NavKey, authed: boolean): string {
   const link = (href: string, label: string, key: NavKey) =>
     `<a${key === active ? ' class="active"' : ""} href="${href}">${label}</a>`;
   return (
     `<header><span class="logo">beacon</span><nav>` +
     `${link("/", "总览", "overview")}${link("/matrix", "渠道矩阵", "matrix")}` +
     `${link("/todos", "待办", "todos")}${link("/posts", "帖子", "posts")}` +
+    `${authLink(authed)}` +
     `</nav></header>`
   );
 }
@@ -145,10 +159,10 @@ function projectCard(p: ProjectSummary): string {
 </div>`;
 }
 
-export function renderOverview(o: Overview): string {
+export function renderOverview(o: Overview, authed: boolean): string {
   const actions = actionItems(o).map(renderActionItem).join("") || `<li>暂无待办建议</li>`;
   const cards = o.projects.map(projectCard).join("") || `<p class="sub">暂无项目</p>`;
-  const body = `${navHeader("overview")}
+  const body = `${navHeader("overview", authed)}
 <main>
 ${freshnessBar(o.sources)}
 <section class="actions">
@@ -204,13 +218,13 @@ function postsTable(rows: PostWithMetrics[], opts: { showProject: boolean; showD
   return `<div class="scroll"><table><tr>${head}</tr>${body}</table></div>`;
 }
 
-export function renderProject(name: string, d: ProjectDetail): string {
+export function renderProject(name: string, d: ProjectDetail, authed: boolean): string {
   const s = d.summary;
   const failCount = d.audit.filter(a => a.status === "fail").length;
   const starSpark = svgSparkline(d.starSeries.map(r => r.stars), 640, 90);
   const viewsSpark = svgSparkline(d.repoSeries.map(r => r.views), 300, 48);
   const clonesSpark = svgSparkline(d.repoSeries.map(r => r.clones), 300, 48);
-  const header = `<header><span class="logo">beacon</span><nav><a href="/">← 返回总览</a></nav></header>`;
+  const header = `<header><span class="logo">beacon</span><nav><a href="/">← 返回总览</a>${authLink(authed)}</nav></header>`;
 
   const body = `${header}
 <main>
@@ -259,7 +273,7 @@ ${renderReferrersTable(d.referrers)}
 
 const LANG_LABELS: Record<string, string> = { zh: "中", en: "英" };
 
-export function renderMatrix(m: MatrixData): string {
+export function renderMatrix(m: MatrixData, authed: boolean): string {
   const covByKey = new Map(m.coverage.map(c => [`${c.project}:${c.channelId}`, c.status]));
   const sugByKey = new Map(m.suggestions.map(s => [`${s.project}:${s.channelId}`, s.score]));
 
@@ -272,18 +286,15 @@ export function renderMatrix(m: MatrixData): string {
       const cells = m.channels
         .map(c => {
           const status = covByKey.get(`${projectName}:${c.id}`);
-          if (status === "posted") return `<td class="posted" title="已发布">✓</td>`;
-          if (status === "planned") return `<td class="planned" title="计划中">◷</td>`;
-          if (status === "na") return `<td class="na">—</td>`;
           const score = sugByKey.get(`${projectName}:${c.id}`);
-          return score ? `<td><span class="sug">${score}</span></td>` : `<td class="na">—</td>`;
+          return authed ? matrixFormCell(projectName, c, status, score) : matrixStaticCell(status, score);
         })
         .join("");
       return `<tr><th>${esc(projectName)}</th>${cells}</tr>`;
     })
     .join("");
 
-  const body = `${navHeader("matrix")}
+  const body = `${navHeader("matrix", authed)}
 <main>
 <h1>渠道覆盖矩阵</h1>
 <p class="lead">项目 × 渠道。数字气泡 = 未覆盖且适配的建议（值为标签适配分）。</p>
@@ -294,20 +305,86 @@ export function renderMatrix(m: MatrixData): string {
   return page("beacon · 渠道矩阵", body);
 }
 
-// ---- todos -------------------------------------------------------------------
+// Read-only cell — exactly today's markup, used for anonymous visitors.
+function matrixStaticCell(status: string | undefined, score: number | undefined): string {
+  if (status === "posted") return `<td class="posted" title="已发布">✓</td>`;
+  if (status === "planned") return `<td class="planned" title="计划中">◷</td>`;
+  if (status === "na") return `<td class="na">—</td>`;
+  return score ? `<td><span class="sug">${score}</span></td>` : `<td class="na">—</td>`;
+}
 
-function renderOpenTodoItem(t: Todo): string {
+const CHANNEL_STATUS_OPTIONS: { value: "posted" | "planned" | "na"; label: string }[] = [
+  { value: "posted", label: "✓ 已发" },
+  { value: "planned", label: "◷ 计划中" },
+  { value: "na", label: "— 不适配" }
+];
+
+// The <select>'s <option>s for one cell. When there's no coverage row yet, a
+// disabled placeholder option is prepended (carrying the suggestion score, if
+// any) so submitting without an explicit choice fails validation instead of
+// silently writing a status the owner never picked — src/api/ui.ts's
+// handleUiChannel rejects an empty `status` with 400.
+function matrixCellOptions(status: string | undefined, score: number | undefined): string {
+  const placeholder = status ? "" : `<option value="" selected disabled>${score ? `建议 ${score}` : "—"}</option>`;
+  const real = CHANNEL_STATUS_OPTIONS.map(
+    o => `<option value="${o.value}"${status === o.value ? " selected" : ""}>${o.label}</option>`
+  ).join("");
+  return placeholder + real;
+}
+
+// Authenticated cell: a small form (project/channelId/returnTo hidden, a status
+// <select>, and a tiny submit button) posting to /ui/channel. `project`/`c.id`/
+// `c.name` are all developer-configured (src/config.ts, src/channels.ts), not
+// user input, but esc() is applied uniformly per the project's XSS discipline.
+function matrixFormCell(
+  projectName: string,
+  c: { id: string; name: string },
+  status: string | undefined,
+  score: number | undefined
+): string {
   return (
-    `<li><input type="checkbox" disabled><span class="pri p${t.priority}">P${t.priority}</span>` +
-    `<span class="proj">${esc(t.project)}</span>${esc(t.title)}<span class="src">${esc(sourceLabel(t.source))}</span></li>`
+    `<td><form method="post" action="/ui/channel" class="blend">` +
+    `<input type="hidden" name="project" value="${esc(projectName)}">` +
+    `<input type="hidden" name="channelId" value="${esc(c.id)}">` +
+    `<input type="hidden" name="returnTo" value="/matrix">` +
+    `<select name="status" class="cell-select" aria-label="${esc(projectName)} × ${esc(c.name)}">${matrixCellOptions(status, score)}</select>` +
+    `<button type="submit" class="cell-go" aria-label="保存">✓</button>` +
+    `</form></td>`
   );
 }
 
-function renderDoneTodoItem(t: Todo): string {
+// ---- todos -------------------------------------------------------------------
+
+function renderOpenTodoItem(t: Todo, authed: boolean): string {
+  const checkbox = authed
+    ? `<input type="checkbox" name="done" value="1" aria-label="标记为已完成">`
+    : `<input type="checkbox" disabled>`;
+  const rowInner =
+    `${checkbox}<span class="pri p${t.priority}">P${t.priority}</span>` +
+    `<span class="proj">${esc(t.project)}</span>${esc(t.title)}<span class="src">${esc(sourceLabel(t.source))}</span>`;
+  if (!authed) return `<li>${rowInner}</li>`;
   return (
-    `<li class="done"><input type="checkbox" checked disabled><span class="pri p${t.priority}">P${t.priority}</span>` +
+    `<li><form method="post" action="/ui/todo" class="blend">` +
+    `<input type="hidden" name="id" value="${esc(String(t.id))}">` +
+    `<input type="hidden" name="returnTo" value="/todos">` +
+    `${rowInner}<button type="submit" class="go">保存</button></form></li>`
+  );
+}
+
+function renderDoneTodoItem(t: Todo, authed: boolean, returnTo: string): string {
+  const checkbox = authed
+    ? `<input type="checkbox" name="done" value="1" checked aria-label="标记为进行中">`
+    : `<input type="checkbox" checked disabled>`;
+  const rowInner =
+    `${checkbox}<span class="pri p${t.priority}">P${t.priority}</span>` +
     `<span class="proj">${esc(t.project)}</span><span class="title">${esc(t.title)}</span>` +
-    `<span class="effect">${t.doneAt ? esc(fmtDateTime(t.doneAt)) : "—"}</span></li>`
+    `<span class="effect">${t.doneAt ? esc(fmtDateTime(t.doneAt)) : "—"}</span>`;
+  if (!authed) return `<li class="done">${rowInner}</li>`;
+  return (
+    `<li class="done"><form method="post" action="/ui/todo" class="blend">` +
+    `<input type="hidden" name="id" value="${esc(String(t.id))}">` +
+    `<input type="hidden" name="returnTo" value="${esc(returnTo)}">` +
+    `${rowInner}<button type="submit" class="go">保存</button></form></li>`
   );
 }
 
@@ -315,31 +392,93 @@ function renderDoneTodoItem(t: Todo): string {
 // "priority-grouped" ordering; each item still carries its own P1/P2/P3 chip
 // rather than being split under separate headings, matching
 // design/pages/todos.html (a single flat list, sorted, no per-tier divider).
-export function renderTodos(todos: Todo[]): string {
+//
+// `filter`: undefined (the default, reached via plain `/todos`) shows both
+// sections, unchanged from before this feature. `"done"` (reached via
+// `/todos?status=done`, src/index.ts) hides the open section — this is what
+// makes the previously-decorative filter pills into working links; there's no
+// symmetric `?status=open` because the default view already leads with open
+// items, so "进行中" just links back to plain `/todos`.
+export function renderTodos(todos: Todo[], authed: boolean, filter?: "done"): string {
   const open = todos.filter(t => t.status === "open").sort((a, b) => a.priority - b.priority);
   const done = todos.filter(t => t.status === "done");
+  const showOpen = filter !== "done";
+  const returnTo = filter === "done" ? "/todos?status=done" : "/todos";
 
-  const body = `${navHeader("todos")}
+  const filterLink = (label: string, count: number, key?: "done") => {
+    const active = key === filter || (!key && !filter);
+    const href = key ? `/todos?status=${key}` : "/todos";
+    return `<a class="filter${active ? " on" : ""}" href="${href}">${esc(label)} ${count}</a>`;
+  };
+
+  const body = `${navHeader("todos", authed)}
 <main>
 <h1>待办</h1>
 <p class="lead">体检 fail 项与矩阵建议自动生成；完成后与流量曲线叠加，看行动带来的变化。</p>
-<div class="filters"><button class="on">进行中 ${open.length}</button><button>已完成 ${done.length}</button></div>
-<p class="sec-cap">进行中</p>
-<section><ul class="plain">${open.map(renderOpenTodoItem).join("") || `<li>暂无进行中待办</li>`}</ul></section>
+<div class="filters">${filterLink("进行中", open.length)}${filterLink("已完成", done.length, "done")}</div>
+${showOpen
+    ? `<p class="sec-cap">进行中</p>
+<section><ul class="plain">${open.map(t => renderOpenTodoItem(t, authed)).join("") || `<li>暂无进行中待办</li>`}</ul></section>`
+    : ""}
 <p class="sec-cap">已完成</p>
-<section><ul class="plain">${done.map(renderDoneTodoItem).join("") || `<li>暂无已完成待办</li>`}</ul></section>
+<section><ul class="plain">${done.map(t => renderDoneTodoItem(t, authed, returnTo)).join("") || `<li>暂无已完成待办</li>`}</ul></section>
 </main>`;
   return page("beacon · 待办", body);
 }
 
 // ---- posts -------------------------------------------------------------------
 
-export function renderPosts(rows: PostWithMetrics[]): string {
-  const body = `${navHeader("posts")}
+// <details>/<summary> gives the "＋ 登记帖子" affordance from
+// design/pages/posts.html a native, JS-free collapsible panel — clicking the
+// summary toggles the form via the browser's built-in disclosure behavior, no
+// scripting involved. Reuses .card for visual consistency with the rest of
+// the dashboard's boxed sections.
+function addPostForm(): string {
+  const projectOptions = CONFIG.projects.map(p => `<option value="${esc(p.name)}">${esc(p.name)}</option>`).join("");
+  return `<details class="card add-post">
+<summary>＋ 登记帖子</summary>
+<form method="post" action="/ui/post" class="card-form">
+<input type="hidden" name="returnTo" value="/posts">
+<label for="post-url">URL</label>
+<input id="post-url" type="url" name="url" required placeholder="https://www.v2ex.com/t/...">
+<label for="post-project">项目</label>
+<select id="post-project" name="project" required>${projectOptions}</select>
+<label for="post-title">标题（可选）</label>
+<input id="post-title" type="text" name="title">
+<label for="post-publishedAt">发布时间（可选，ISO，如 2026-08-01T09:00:00Z）</label>
+<input id="post-publishedAt" type="text" name="publishedAt" placeholder="2026-08-01T09:00:00Z">
+<button type="submit" class="primary">登记</button>
+</form>
+</details>`;
+}
+
+export function renderPosts(rows: PostWithMetrics[], authed: boolean): string {
+  const body = `${navHeader("posts", authed)}
 <main>
 <h1>帖子榜单</h1>
 <p class="lead"><span class="live"><span class="dot"></span>历史快照每日落库</span></p>
+${authed ? addPostForm() : ""}
 ${postsTable(rows, { showProject: true, showDate: true })}
 </main>`;
   return page("beacon · 帖子", body);
+}
+
+// ---- login -------------------------------------------------------------------
+
+// GET/POST /login (src/api/session.ts). A single password field — no JS, no
+// fetch: correct token -> 303 + Set-Cookie (session.ts); wrong token ->
+// session.ts re-renders this exact page with error=true at HTTP 401.
+export function renderLogin(error: boolean): string {
+  const body = `<header><span class="logo">beacon</span></header>
+<main>
+<h1>登录</h1>
+<p class="lead">输入管理员令牌以启用编辑功能。</p>
+${error ? `<p class="error-text">令牌错误，请重试。</p>` : ""}
+<form method="post" action="/login" class="card card-form">
+<label for="admin-token">管理员令牌</label>
+<input id="admin-token" type="password" name="token" autofocus required>
+<button type="submit" class="primary">登录</button>
+</form>
+</main>`;
+  return page("beacon · 登录", body);
 }
