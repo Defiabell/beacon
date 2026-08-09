@@ -8,8 +8,14 @@ import { timingSafeEqual, adminCookieHeader, clearAdminCookieHeader } from "../a
 import { renderLogin } from "../ui/pages";
 import { parseForm, formString } from "../http-forms";
 
+// Coordinator review (2026-08-10): a login page conventionally sends no-store
+// (avoids a stale error/success state being served from a shared or browser
+// cache). Paired with src/index.ts excluding /login from the cache-put path
+// entirely — Cloudflare's Cache API rejects a .put() of a no-store response,
+// which would otherwise reject the surrounding ctx.waitUntil on every single
+// anonymous GET /login.
 function htmlResponse(body: string, status: number): Response {
-  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8" } });
+  return new Response(body, { status, headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store" } });
 }
 
 function seeOther(location: string, setCookie: string): Response {

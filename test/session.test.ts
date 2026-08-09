@@ -21,6 +21,22 @@ describe("GET /login", () => {
     expect(text).toContain('type="password"');
     expect(text).not.toContain("令牌错误");
   });
+
+  // Coordinator review (2026-08-10): harmless as static content, but a login
+  // page conventionally sends no-store — an anonymous GET /login was otherwise
+  // eligible for the shared cache like any other public GET.
+  it("sends Cache-Control: no-store", async () => {
+    const res = await SELF.fetch(new Request("https://beacon.internal/login"));
+    // Drain the body BEFORE asserting: this response is a 200 to a (today)
+    // cacheable GET, so index.ts's fetch() has an outstanding
+    // ctx.waitUntil(caches.default.put(req, res.clone())) racing this read. If
+    // the assertion below throws first, neither tee branch of that clone ever
+    // gets read and the test hangs forever (see test/router.test.ts's
+    // file-level comment on this exact Miniflare/workerd behavior) — this bit
+    // during RED while this test was still failing for the right reason.
+    await res.text();
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+  });
 });
 
 describe("POST /login", () => {
