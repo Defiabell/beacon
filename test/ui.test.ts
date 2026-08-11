@@ -46,6 +46,25 @@ describe("svgSparkline", () => {
     const match = svg.match(/points="([^"]+)"/);
     expect(match![1].trim().split(/\s+/)).toHaveLength(3);
   });
+
+  it("with no markers argument, renders exactly as before this feature (no marker lines)", () => {
+    const svg = svgSparkline([1, 2, 3]);
+    expect(svg).not.toContain('class="marker"');
+  });
+
+  it("draws one vertical marker line per in-range marker, carrying its escaped label as a <title> tooltip", () => {
+    const svg = svgSparkline([1, 2, 3, 4, 5], 100, 40, [{ index: 2, label: "<b>发帖</b>" }]);
+    expect(svg).toContain('class="marker"');
+    expect(svg).not.toContain("<b>发帖</b>");
+    expect(svg).toContain("&lt;b&gt;发帖&lt;/b&gt;");
+    // exactly one marker line for the one in-range marker given
+    expect((svg.match(/class="marker"/g) ?? []).length).toBe(1);
+  });
+
+  it("silently drops a marker whose index falls outside the series (event date not present in this particular series)", () => {
+    const svg = svgSparkline([1, 2, 3], 100, 40, [{ index: 99, label: "out of range" }, { index: -1, label: "also out of range" }]);
+    expect(svg).not.toContain('class="marker"');
+  });
 });
 
 describe("page", () => {

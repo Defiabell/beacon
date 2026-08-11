@@ -24,13 +24,31 @@ function round1(n: number): string {
   return (Math.round(n * 10) / 10).toString();
 }
 
+// A point-in-time annotation for svgSparkline below — src/ui/pages.ts uses
+// this to line up an event (a post/todo from src/impact/attribute.ts) with
+// the exact x-position of its date in a repoSeries/starSeries array. `index`
+// is a position into the same `values` array passed to svgSparkline, not a
+// date — the caller (pages.ts) is the one that knows how to map a date to an
+// index in a particular series.
+export interface SparkMarker {
+  index: number;
+  label: string;
+}
+
 // Inline SVG polyline sparkline, normalized into a `width`x`height` viewBox.
 // Returns "" for an empty series (nothing to draw — callers should handle
 // that themselves, e.g. render a "暂无数据" fallback instead). A single-value
 // series still renders (one point, no visible line) rather than being treated
 // as empty. When every value is equal (range 0) the line is drawn flat down
 // the vertical center rather than dividing by zero.
-export function svgSparkline(values: number[], width = 220, height = 36): string {
+//
+// `markers` (design doc §5 — "把该项目的事件画成竖线加标签") draws a full-height
+// dashed vertical line at each in-range marker's x-position, carrying its
+// label as a native SVG <title> tooltip (esc()'d — a post's title is
+// DB-derived text). A marker whose `index` falls outside `values` is silently
+// dropped rather than clamped — e.g. an event's date exists in the project's
+// full star history but isn't within the shorter repo_daily chart window.
+export function svgSparkline(values: number[], width = 220, height = 36, markers: SparkMarker[] = []): string {
   if (values.length === 0) return "";
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -44,9 +62,17 @@ export function svgSparkline(values: number[], width = 220, height = 36): string
       return `${round1(x)},${round1(y)}`;
     })
     .join(" ");
+  const markerSvg = markers
+    .filter(m => m.index >= 0 && m.index < values.length)
+    .map(m => {
+      const x = round1(stepX * m.index);
+      return `<line class="marker" x1="${x}" y1="0" x2="${x}" y2="${height}"><title>${esc(m.label)}</title></line>`;
+    })
+    .join("");
   return (
     `<svg width="100%" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="趋势走势">` +
     `<line class="base" x1="0" y1="${height - 1}" x2="${width}" y2="${height - 1}"/>` +
+    `${markerSvg}` +
     `<polyline class="line" points="${points}"/>` +
     `</svg>`
   );
@@ -115,6 +141,7 @@ ol.todo li:first-child, ul.plain li:first-child { border-top: 0; }
 .delta { font-size: 12.5px; font-weight: 600; color: var(--good-text); }
 svg .line { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 svg .base { stroke: var(--axis); stroke-width: 1; }
+svg .marker { stroke: var(--p2); stroke-width: 1; stroke-dasharray: 2 2; }
 .foot { display: flex; gap: 8px; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--grid); font-size: 11.5px; color: var(--ink-2); flex-wrap: wrap; }
 .chip, .platform { border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: var(--ink-2); }
 .platform { border-radius: 4px; white-space: nowrap; }
