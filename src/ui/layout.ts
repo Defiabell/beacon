@@ -165,6 +165,9 @@ ul.audit li:last-child { border-bottom: 0; }
 .matrix-table thead th .lang { display: block; font-weight: 400; }
 .matrix-table tbody th { text-align: left; font-weight: 600; position: sticky; left: 0; background: var(--surface-1); }
 .posted { color: var(--posted); font-weight: 700; }
+/* A posted cell's attached effect (design doc §5 / review item 2) — small and
+   muted so it reads as supporting detail under the ✓, not a competing number. */
+.cell-effect { font-size: 10px; font-weight: 400; color: var(--ink-2); white-space: normal; margin-top: 2px; }
 .planned { color: var(--ink-2); }
 .sug { display: inline-block; min-width: 34px; padding: 2px 7px; border-radius: 999px; background: var(--sug-bg); color: var(--sug-ink); font-weight: 700; font-size: 12px; }
 .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }

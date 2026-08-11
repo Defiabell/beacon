@@ -7,7 +7,7 @@
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, MatrixData, PostWithMetrics, ProjectSummary } from "../api/public";
+import type { Overview, ProjectDetail, MatrixData, MatrixCoverageRow, MatrixEffect, PostWithMetrics, ProjectSummary } from "../api/public";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, ImpactWindow } from "../impact/attribute";
 import { CONFIG } from "../config";
@@ -300,7 +300,7 @@ ${renderReferrersTable(d.referrers)}
 const LANG_LABELS: Record<string, string> = { zh: "中", en: "英" };
 
 export function renderMatrix(m: MatrixData, authed: boolean): string {
-  const covByKey = new Map(m.coverage.map(c => [`${c.project}:${c.channelId}`, c.status]));
+  const covByKey = new Map(m.coverage.map(c => [`${c.project}:${c.channelId}`, c]));
   const sugByKey = new Map(m.suggestions.map(s => [`${s.project}:${s.channelId}`, s.score]));
 
   const headCells = m.channels
@@ -311,9 +311,9 @@ export function renderMatrix(m: MatrixData, authed: boolean): string {
     .map(projectName => {
       const cells = m.channels
         .map(c => {
-          const status = covByKey.get(`${projectName}:${c.id}`);
+          const cov = covByKey.get(`${projectName}:${c.id}`);
           const score = sugByKey.get(`${projectName}:${c.id}`);
-          return authed ? matrixFormCell(projectName, c, status, score) : matrixStaticCell(status, score);
+          return authed ? matrixFormCell(projectName, c, cov, score) : matrixStaticCell(cov, score);
         })
         .join("");
       return `<tr><th>${esc(projectName)}</th>${cells}</tr>`;
@@ -331,11 +331,25 @@ export function renderMatrix(m: MatrixData, authed: boolean): string {
   return page("beacon · 渠道矩阵", body);
 }
 
+// A posted cell's attached effect (design doc §5 / review item 2): buildMatrix
+// already pays ~10 extra D1 queries to compute coverage[].effect, but nothing
+// consumed it — this cell rendered a bare ✓ regardless. Reuses .win-note (the
+// impact page's own class, src/ui/layout.ts) for the exact same honesty rule:
+// `effect.status === "collecting"` is the only state whose numbers (the
+// after-window's own totals) are still incomplete — "insufficient-history"
+// only ever describes a short *before* window, which this effect doesn't
+// carry, so it needs no caveat here.
+function effectSummary(effect: MatrixEffect | undefined): string {
+  if (!effect) return "";
+  const note = effect.status === "collecting" ? `<span class="win-note"> 统计中 ${effect.days}/7 天</span>` : "";
+  return `<div class="cell-effect">浏览 ${effect.views} · star ${deltaArrow(effect.starsDelta)}${note}</div>`;
+}
+
 // Read-only cell — exactly today's markup, used for anonymous visitors.
-function matrixStaticCell(status: string | undefined, score: number | undefined): string {
-  if (status === "posted") return `<td class="posted" title="已发布">✓</td>`;
-  if (status === "planned") return `<td class="planned" title="计划中">◷</td>`;
-  if (status === "na") return `<td class="na">—</td>`;
+function matrixStaticCell(cov: MatrixCoverageRow | undefined, score: number | undefined): string {
+  if (cov?.status === "posted") return `<td class="posted" title="已发布">✓${effectSummary(cov.effect)}</td>`;
+  if (cov?.status === "planned") return `<td class="planned" title="计划中">◷</td>`;
+  if (cov?.status === "na") return `<td class="na">—</td>`;
   return score ? `<td><span class="sug">${score}</span></td>` : `<td class="na">—</td>`;
 }
 
@@ -365,7 +379,7 @@ function matrixCellOptions(status: string | undefined, score: number | undefined
 function matrixFormCell(
   projectName: string,
   c: { id: string; name: string },
-  status: string | undefined,
+  cov: MatrixCoverageRow | undefined,
   score: number | undefined
 ): string {
   return (
@@ -373,9 +387,9 @@ function matrixFormCell(
     `<input type="hidden" name="project" value="${esc(projectName)}">` +
     `<input type="hidden" name="channelId" value="${esc(c.id)}">` +
     `<input type="hidden" name="returnTo" value="/matrix">` +
-    `<select name="status" class="cell-select" aria-label="${esc(projectName)} × ${esc(c.name)}">${matrixCellOptions(status, score)}</select>` +
+    `<select name="status" class="cell-select" aria-label="${esc(projectName)} × ${esc(c.name)}">${matrixCellOptions(cov?.status, score)}</select>` +
     `<button type="submit" class="cell-go" aria-label="保存">✓</button>` +
-    `</form></td>`
+    `</form>${effectSummary(cov?.effect)}</td>`
   );
 }
 

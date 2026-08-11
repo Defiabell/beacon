@@ -342,6 +342,66 @@ describe("renderMatrix", () => {
     expect(hnCellMatch).not.toBeNull();
     expect(hnCellMatch![0]).toContain('<option value="" selected disabled>建议 2</option>');
   });
+
+  // Review item 2 (design doc §5): buildMatrix already computes coverage[].effect
+  // (a MatrixEffect) and /api/matrix exposes it, but renderMatrix's covByKey
+  // only ever carried `status` — a posted cell rendered a bare ✓ no matter what
+  // buildMatrix paid ~10 extra D1 queries to compute. "the test whose absence
+  // hid this" per the review note.
+  describe("posted cell effect (design doc §5 / review item 2)", () => {
+    const matrixWithEffect: MatrixData = {
+      projects: ["nightide"],
+      channels: [{ id: "v2ex", name: "V2EX", lang: "zh" }],
+      coverage: [
+        {
+          project: "nightide",
+          channelId: "v2ex",
+          status: "posted",
+          effect: { views: 29, humanClones: 2, starsDelta: 2, status: "complete", days: 7 }
+        }
+      ],
+      suggestions: []
+    };
+
+    // Scoped to <tbody> (not the whole document): src/ui/layout.ts's shared
+    // CSS carries both the literal Chinese text "统计中" (an explanatory
+    // comment) and the class name "win-note" (its own selector) on every page
+    // regardless of content — a whole-document substring check on either would
+    // pass whether or not renderMatrix does anything at all.
+    function tbody(html: string): string {
+      return html.match(/<tbody>[\s\S]*?<\/tbody>/)?.[0] ?? "";
+    }
+
+    it("a posted cell with an attached effect renders its actual numbers, not a bare checkmark", () => {
+      const html = renderMatrix(matrixWithEffect, false);
+      const body = tbody(html);
+      expect(body).toContain("✓");
+      expect(body).toContain("29");
+    });
+
+    it("a posted cell whose effect is still collecting carries the same honesty caveat used everywhere else", () => {
+      const collectingMatrix: MatrixData = {
+        ...matrixWithEffect,
+        coverage: [
+          {
+            project: "nightide",
+            channelId: "v2ex",
+            status: "posted",
+            effect: { views: 5, humanClones: 0, starsDelta: 0, status: "collecting", days: 2 }
+          }
+        ]
+      };
+      const body = tbody(renderMatrix(collectingMatrix, false));
+      expect(body).toContain('class="win-note"');
+      expect(body).toContain("统计中");
+    });
+
+    it("a posted cell with no effect (no postId link) still renders the plain checkmark, unchanged", () => {
+      const body = tbody(renderMatrix(matrix, false)); // matrix's v2ex coverage row carries no `effect`
+      expect(body).toContain('class="posted"');
+      expect(body).not.toContain('class="win-note"');
+    });
+  });
 });
 
 describe("renderTodos", () => {
