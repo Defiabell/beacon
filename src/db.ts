@@ -64,12 +64,22 @@ export async function getLatestReferrers(db: D1Database, repo: string): Promise<
   return res.results;
 }
 
+// created_at is generated here (new Date().toISOString()), not taken from
+// `post` — it's not part of the Post param contract (see src/types.ts), so
+// every existing caller (src/api/admin.ts's createPost, tests) is unaffected.
+// This is deliberately JS-side rather than SQL's datetime('now') (used
+// elsewhere, e.g. insertTodoIfNew) so the format matches other ISO
+// timestamps this app writes (e.g. todos.done_at) — both are just the first
+// 10 characters once normalized to a calendar day, so the two conventions
+// don't actually need to match, but keeping one style is simpler to reason
+// about. See migrations/0002_posts_created_at.sql for how existing rows
+// (and rows inserted before this column existed) got backfilled.
 export async function insertPost(db: D1Database, post: Post): Promise<number> {
   const res = await db
     .prepare(
-      `INSERT INTO posts (url, platform, project, title, published_at) VALUES (?1,?2,?3,?4,?5)`
+      `INSERT INTO posts (url, platform, project, title, published_at, created_at) VALUES (?1,?2,?3,?4,?5,?6)`
     )
-    .bind(post.url, post.platform, post.project, post.title, post.publishedAt)
+    .bind(post.url, post.platform, post.project, post.title, post.publishedAt, new Date().toISOString())
     .run();
   return res.meta.last_row_id;
 }
@@ -80,6 +90,29 @@ export async function listPosts(db: D1Database): Promise<Post[]> {
       `SELECT id, url, platform, project, title, published_at AS publishedAt FROM posts`
     )
     .all<Post>();
+  return res.results;
+}
+
+export interface PostForImpact {
+  id: number;
+  project: string;
+  platform: Post["platform"];
+  title: string;
+  url: string;
+  publishedAt: string | null;
+  createdAt: string;
+}
+
+// Feeds src/impact/attribute.ts's buildEvents — separate from listPosts
+// (rather than adding createdAt to it) so the widely-used Post type/listPosts
+// query keeps its exact current shape; every existing caller of listPosts is
+// untouched by this feature.
+export async function listPostsForImpact(db: D1Database): Promise<PostForImpact[]> {
+  const res = await db
+    .prepare(
+      `SELECT id, project, platform, title, url, published_at AS publishedAt, created_at AS createdAt FROM posts`
+    )
+    .all<PostForImpact>();
   return res.results;
 }
 
@@ -333,6 +366,22 @@ export async function getRepoSeries(db: D1Database, repo: string, days: number):
        ) ORDER BY date ASC`
     )
     .bind(repo, days)
+    .all<RepoDaily>();
+  return res.results;
+}
+
+// Every repo_daily row for `repo`, ascending by date, with no `days` limit —
+// unlike getRepoSeries (whose "most recent N rows" window suits a chart, not
+// attribution). The impact engine (src/impact/attribute.ts) needs the full
+// history because an event's before/after window can fall anywhere in it, not
+// just within the last N days. Mirrors getStarSeries's shape/semantics below.
+export async function getAllRepoDaily(db: D1Database, repo: string): Promise<RepoDaily[]> {
+  const res = await db
+    .prepare(
+      `SELECT repo, date, views, unique_views AS uniqueViews, clones, unique_clones AS uniqueClones, stars, forks
+       FROM repo_daily WHERE repo=?1 ORDER BY date ASC`
+    )
+    .bind(repo)
     .all<RepoDaily>();
   return res.results;
 }
