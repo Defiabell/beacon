@@ -274,6 +274,47 @@ describe("authenticated (Bearer-header-carrying) responses bypass the shared cac
   });
 });
 
+// Review item 3: a hand-edited (or pre-guard) row with a garbage published_at
+// must never take down every route that reads events — one bad calendar day
+// used to throw a RangeError deep inside shiftDate and 500 all four of these.
+describe("a malformed published_at in the DB never 500s the routes that read it (review item 3)", () => {
+  it("GET /api/impact, /impact, /matrix, and /p/:name all stay healthy when a post's published_at is garbage", async () => {
+    const name = CONFIG.projects[0].name; // nightide
+    const url = "https://www.v2ex.com/t/9990002";
+    await env.DB.prepare(
+      `insert into posts (url, platform, project, title, published_at, created_at) values (?1,'v2ex',?2,'bad date post','08/09/2026', datetime('now'))`
+    )
+      .bind(url, name)
+      .run();
+    // Link it into the matrix as a posted, postId-linked cell — otherwise
+    // buildMatrix skips the whole impact pipeline (its ~10-extra-query cost is
+    // only paid when there's something to attach an effect to), and this test
+    // wouldn't actually exercise /matrix's exposure to the bug.
+    await env.DB.prepare(
+      `insert into project_channels (project, channel_id, status, post_id, updated_at)
+       values (?1,'v2ex','posted',(select id from posts where url=?2), datetime('now'))`
+    )
+      .bind(name, url)
+      .run();
+
+    const impactJson = await SELF.fetch(req("GET", "/api/impact"));
+    expect(impactJson.status).toBe(200);
+    await impactJson.text();
+
+    const impactPage = await SELF.fetch(req("GET", "/impact"));
+    expect(impactPage.status).toBe(200);
+    await impactPage.text();
+
+    const matrixPage = await SELF.fetch(req("GET", "/matrix"));
+    expect(matrixPage.status).toBe(200);
+    await matrixPage.text();
+
+    const projectPage = await SELF.fetch(req("GET", `/p/${name}`));
+    expect(projectPage.status).toBe(200);
+    await projectPage.text();
+  });
+});
+
 describe("XSS via a stored todo title", () => {
   it("the rendered /todos page contains the escaped title, never the raw <script> tag", async () => {
     await env.DB.prepare(

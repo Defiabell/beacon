@@ -51,6 +51,18 @@ function isNonEmptyString(v: unknown): v is string {
   return typeof v === "string" && v.length > 0;
 }
 
+// First of two defenses against a malformed publishedAt (review item 3): an
+// admin-supplied value that doesn't even look like a date (e.g. "08/09/2026")
+// would otherwise flow untouched into buildEvents (src/impact/attribute.ts),
+// where slicing the first 10 characters and handing it to
+// `new Date(...).toISOString()` throws a RangeError — 500ing every route that
+// reads events (/impact, /api/impact, /matrix, this project's /p/:name) until
+// someone edits the row by hand. This only checks the shape (a full calendar-
+// day validity check — rejecting e.g. "2026-13-01" — is buildEvents' own
+// second-line defense, since that also has to cover rows written before this
+// guard existed).
+const PUBLISHED_AT_PREFIX = /^\d{4}-\d{2}-\d{2}/;
+
 export interface CreatePostInput {
   url: unknown;
   project: unknown;
@@ -74,6 +86,9 @@ export type CreatePostResult =
 export async function createPost(env: Env, input: CreatePostInput, fetchFn: FetchFn = fetch): Promise<CreatePostResult> {
   if (!isNonEmptyString(input.url)) return { ok: false, error: "missing required field: url", status: 400 };
   if (!isNonEmptyString(input.project)) return { ok: false, error: "missing required field: project", status: 400 };
+  if (isNonEmptyString(input.publishedAt) && !PUBLISHED_AT_PREFIX.test(input.publishedAt)) {
+    return { ok: false, error: `invalid publishedAt: expected a date starting with YYYY-MM-DD, got "${input.publishedAt}"`, status: 400 };
+  }
 
   const platform = detectPlatform(input.url);
   if (!platform) return { ok: false, error: `could not detect platform for url: ${input.url}`, status: 400 };

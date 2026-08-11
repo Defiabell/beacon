@@ -78,6 +78,55 @@ describe("buildEvents", () => {
   });
 });
 
+// Review item 3: `new Date(("08/09/2026").slice(0,10)).toISOString()` throws a
+// RangeError on an Invalid Date — a single malformed date must never reach
+// that far. buildEvents is the choke point every caller (buildImpact,
+// buildProjectDetail, buildMatrix) goes through, so skipping a bad row here
+// protects all of them at once.
+describe("buildEvents: skips a row whose date isn't a valid calendar day, rather than producing an event that would later crash shiftDate", () => {
+  it("skips a post whose publishedAt isn't YYYY-MM-DD shaped at all, keeping the well-formed one", () => {
+    const events = buildEvents(
+      [
+        { id: 1, project: "x", platform: "v2ex", title: "bad", url: "u1", publishedAt: "08/09/2026", createdAt: "2026-08-01T00:00:00Z" },
+        { id: 2, project: "x", platform: "v2ex", title: "good", url: "u2", publishedAt: "2026-08-09", createdAt: "2026-08-01T00:00:00Z" }
+      ],
+      []
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0].title).toBe("good");
+  });
+
+  it("skips a post whose publishedAt is syntactically YYYY-MM-DD but not a real calendar day (month 13)", () => {
+    const events = buildEvents(
+      [{ id: 1, project: "x", platform: "v2ex", title: "bad month", url: "u1", publishedAt: "2026-13-01", createdAt: "2026-08-01T00:00:00Z" }],
+      []
+    );
+    expect(events).toEqual([]);
+  });
+
+  it("skips a post whose publishedAt overflows into the next month (Feb 30) rather than silently accepting the rollover", () => {
+    const events = buildEvents(
+      [{ id: 1, project: "x", platform: "v2ex", title: "feb 30", url: "u1", publishedAt: "2026-02-30", createdAt: "2026-08-01T00:00:00Z" }],
+      []
+    );
+    expect(events).toEqual([]);
+  });
+
+  it("skips a todo whose done_at is malformed", () => {
+    const events = buildEvents([], [{ project: "x", title: "bad todo", doneAt: "not-a-date" }]);
+    expect(events).toEqual([]);
+  });
+
+  it("never throws even when every input row is malformed", () => {
+    expect(() =>
+      buildEvents(
+        [{ id: 1, project: "x", platform: "v2ex", title: "t", url: "u", publishedAt: "bogus", createdAt: "also bogus" }],
+        [{ project: "x", title: "t2", doneAt: "still bogus" }]
+      )
+    ).not.toThrow();
+  });
+});
+
 describe("computeImpact — status branches", () => {
   const EVENT: ImpactEvent = { kind: "post", date: "2026-08-09", project: "x", title: "t", platform: "v2ex", url: "u" };
 

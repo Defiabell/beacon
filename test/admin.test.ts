@@ -198,6 +198,27 @@ describe("POST /api/admin/posts", () => {
     expect(post?.publishedAt).toBe(publishedAt);
   });
 
+  // Review item 3: an unvalidated publishedAt like "08/09/2026" flows straight
+  // into buildEvents (src/impact/attribute.ts), where slicing the first 10
+  // characters and handing it to `new Date(...).toISOString()` throws a
+  // RangeError — 500ing every route that reads events until someone edits the
+  // row by hand. Reject the obviously-malformed shape at write time instead.
+  it("400s with a clear message when publishedAt doesn't start with a YYYY-MM-DD date", async () => {
+    const url = "https://www.v2ex.com/t/5550001";
+    const res = await handleAdmin(
+      req("POST", "/api/admin/posts", { body: { url, project: "nightide", publishedAt: "08/09/2026" } }),
+      env,
+      "/api/admin/posts",
+      v2exStub
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json<{ error: string }>();
+    expect(body.error).toContain("publishedAt");
+
+    const post = await env.DB.prepare("select id from posts where url=?1").bind(url).first();
+    expect(post).toBeNull();
+  });
+
   it("defaults publishedAt to null when omitted (unchanged behavior)", async () => {
     const url = "https://www.v2ex.com/t/3330002";
     const res = await handleAdmin(

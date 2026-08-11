@@ -40,25 +40,43 @@ function toCalendarDay(s: string): string {
   return s.slice(0, 10);
 }
 
+// A "YYYY-MM-DD" string is only trustworthy once it round-trips through a
+// real Date — the regex alone accepts syntactically well-formed nonsense
+// (e.g. "2026-13-45"), and `new Date(...)` silently rolls a merely-out-of-
+// range day into the next month (e.g. "2026-02-30" -> "2026-03-02") rather
+// than producing an Invalid Date for it. Comparing the round-tripped ISO
+// date back to the input catches both cases, plus anything that isn't even
+// date-shaped (e.g. "08/09/2026", where `new Date(...)` is Invalid Date and
+// `.getTime()` is NaN).
+//
+// Review item 3: a date failing this check must never reach shiftDate/
+// computeImpact below — `new Date(badDate).toISOString()` there throws a
+// RangeError on an Invalid Date, which 500s every route that reads events
+// (/impact, /api/impact, /matrix, /p/:name) until someone edits the row by
+// hand. src/api/admin.ts's createPost rejects the obviously-malformed shape
+// at write time, but this is the second, unconditional line of defense: it
+// also covers rows written before that guard existed, or edited directly.
+function isValidCalendarDay(day: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return false;
+  const d = new Date(`${day}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === day;
+}
+
 // Event time = COALESCE(published_at, created_at) for posts (design doc §2/§4);
 // done_at for todos. Events are returned most-recent-first, matching /impact's
-// "按时间倒序" listing.
+// "按时间倒序" listing. A row whose resulting day isn't a valid calendar date is
+// dropped rather than turned into an event — see isValidCalendarDay above.
 export function buildEvents(posts: PostEventInput[], todos: TodoEventInput[]): ImpactEvent[] {
-  const postEvents: ImpactEvent[] = posts.map(p => ({
-    kind: "post",
-    date: toCalendarDay(p.publishedAt ?? p.createdAt),
-    project: p.project,
-    title: p.title,
-    platform: p.platform,
-    url: p.url,
-    postId: p.id
-  }));
-  const todoEvents: ImpactEvent[] = todos.map(t => ({
-    kind: "todo",
-    date: toCalendarDay(t.doneAt),
-    project: t.project,
-    title: t.title
-  }));
+  const postEvents: ImpactEvent[] = posts.flatMap((p): ImpactEvent[] => {
+    const date = toCalendarDay(p.publishedAt ?? p.createdAt);
+    if (!isValidCalendarDay(date)) return [];
+    return [{ kind: "post", date, project: p.project, title: p.title, platform: p.platform, url: p.url, postId: p.id }];
+  });
+  const todoEvents: ImpactEvent[] = todos.flatMap((t): ImpactEvent[] => {
+    const date = toCalendarDay(t.doneAt);
+    if (!isValidCalendarDay(date)) return [];
+    return [{ kind: "todo", date, project: t.project, title: t.title }];
+  });
   return [...postEvents, ...todoEvents].sort((a, b) => b.date.localeCompare(a.date));
 }
 

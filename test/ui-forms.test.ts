@@ -158,6 +158,26 @@ describe("POST /ui/post", () => {
     );
     expect(res.status).toBe(400);
   });
+
+  // Review item 3: this no-JS form is the other write path into the same
+  // shared createPost (src/api/admin.ts) — must reject the same malformed
+  // publishedAt shape the JSON admin API does (see admin.test.ts).
+  it("400s (plain text) when publishedAt doesn't start with a YYYY-MM-DD date", async () => {
+    const res = await handleUi(
+      formReq(
+        "POST",
+        "/ui/post",
+        { url: "https://www.v2ex.com/t/5550002", project: "nightide", publishedAt: "08/09/2026" },
+        { token: ADMIN_TOKEN }
+      ),
+      env,
+      "/ui/post",
+      v2exStub
+    );
+    expect(res.status).toBe(400);
+    const text = await res.text();
+    expect(text).toContain("publishedAt");
+  });
 });
 
 describe("POST /ui/channel", () => {
