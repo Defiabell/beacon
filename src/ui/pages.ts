@@ -152,11 +152,14 @@ function renderActionItem(item: ActionItem): string {
 function projectCard(p: ProjectSummary): string {
   const tags = projectTagsLabel(p.project);
   const referrerChip = p.topReferrers.length > 0 ? `<span class="chip">来源 ${esc(p.topReferrers[0].referrer)}</span>` : "";
+  // Review item 1 (design doc §3): clones14d is human-only — a nonzero
+  // machineClones14d is disclosed right next to it, never folded in.
+  const machineNote = p.machineClones14d > 0 ? `（另有 ${p.machineClones14d} 次机器 clone）` : "";
   return `<div class="card">
 <h3><a href="/p/${encodeURIComponent(p.project)}">${esc(p.project)}</a></h3>
 <p class="repo">${esc(p.repo)}${tags ? " · " + esc(tags) : ""}</p>
 <div class="stat-row"><span class="big">${p.stars}</span><span class="unit">stars</span><span class="delta">${deltaArrow(p.starsDelta7d)} 本周</span></div>
-<div class="foot"><span class="chip">views 14d ${p.views14d}</span><span class="chip">clones 14d ${p.clones14d}</span><span class="chip">帖子 ${p.postCount}</span>${referrerChip}</div>
+<div class="foot"><span class="chip">views 14d ${p.views14d}</span><span class="chip">clones 14d ${p.clones14d}${machineNote}</span><span class="chip">帖子 ${p.postCount}</span>${referrerChip}</div>
 </div>`;
 }
 
@@ -243,6 +246,11 @@ export function renderProject(name: string, d: ProjectDetail, authed: boolean): 
   const viewsSpark = svgSparkline(d.repoSeries.map(r => r.views), 300, 48, repoMarks);
   const clonesSpark = svgSparkline(d.repoSeries.map(r => r.clones), 300, 48, repoMarks);
   const header = `<header><span class="logo">beacon</span><nav><a href="/">← 返回总览</a>${authLink(authed)}</nav></header>`;
+  // Review item 1: same human/machine disclosure as the overview card (see
+  // projectCard) — the clone curve below stays raw/unfiltered (design doc §3
+  // never touches repo_daily itself), this note just labels what the "clones
+  // · 14d" figure right above it actually counts.
+  const machineCloneNote = s.machineClones14d > 0 ? `<p class="sub">另有 ${s.machineClones14d} 次机器 clone</p>` : "";
 
   const body = `${header}
 <main>
@@ -262,7 +270,7 @@ ${starSpark || `<p class="sub">暂无数据</p>`}
 <p class="sub">GitHub traffic（每日采集累积）</p>
 <div class="two">
 <div><div class="hero"><div><div class="n">${s.views14d}</div><div class="l">views · 14d</div></div></div>${viewsSpark}</div>
-<div><div class="hero"><div><div class="n">${s.clones14d}</div><div class="l">clones · 14d</div></div></div>${clonesSpark}</div>
+<div><div class="hero"><div><div class="n">${s.clones14d}</div><div class="l">clones · 14d</div></div></div>${machineCloneNote}${clonesSpark}</div>
 </div>
 </div>
 <div class="card">

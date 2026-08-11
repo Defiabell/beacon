@@ -2,6 +2,7 @@ import type { Env, RepoDaily, ReferrerRow, Post, PostMetrics, Todo, CheckResult,
 import type { ProjectConfig } from "../config";
 import { CONFIG } from "../config";
 import { CHANNELS, suggestPairs, type Suggestion } from "../channels";
+import { classifyDay } from "../impact/classify";
 import {
   getStarSeries,
   getRepoSeries,
@@ -42,7 +43,14 @@ export interface ProjectSummary {
   stars: number;
   starsDelta7d: number;
   views14d: number;
+  // Human-only clone count (classifyDay-filtered — design doc §3), NOT a raw
+  // sum of repo_daily.clones. Review item 1: the raw sum used to be what this
+  // field held, which silently folded bot/CI clone spikes into the number a
+  // reader sees labeled "clones 14d" — nightide alone has 109 machine clones
+  // in 14 days. machineClones14d (below) discloses that count separately; the
+  // two are never added together anywhere in the UI.
   clones14d: number;
+  machineClones14d: number;
   postCount: number;
   topReferrers: ReferrerRow[];
 }
@@ -134,14 +142,23 @@ function computeProjectSummary(
 ): ProjectSummary {
   const { stars, starsDelta7d } = computeStarsDelta(starSeries);
   const views14d = repoSeries.reduce((sum, r) => sum + r.views, 0);
-  const clones14d = repoSeries.reduce((sum, r) => sum + r.clones, 0);
+  // classifyDay's per-day split, summed across the window — see the doc
+  // comment on ProjectSummary.clones14d above.
+  const { humanClones, machineClones } = repoSeries.reduce(
+    (acc, r) => {
+      const c = classifyDay(r);
+      return { humanClones: acc.humanClones + c.humanClones, machineClones: acc.machineClones + c.machineClones };
+    },
+    { humanClones: 0, machineClones: 0 }
+  );
   return {
     project: project.name,
     repo: project.repo,
     stars,
     starsDelta7d,
     views14d,
-    clones14d,
+    clones14d: humanClones,
+    machineClones14d: machineClones,
     postCount,
     topReferrers: referrers.slice(0, TOP_REFERRERS_LIMIT)
   };

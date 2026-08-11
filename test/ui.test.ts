@@ -86,6 +86,7 @@ function summary(overrides: Partial<ProjectSummary> = {}): ProjectSummary {
     starsDelta7d: 2,
     views14d: 50,
     clones14d: 5,
+    machineClones14d: 0,
     postCount: 1,
     topReferrers: [],
     ...overrides
@@ -124,6 +125,37 @@ describe("renderOverview", () => {
   it("doesn't crash on an all-empty Overview", () => {
     const overview: Overview = { projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0 };
     expect(() => renderOverview(overview, false)).not.toThrow();
+  });
+
+  // Review item 1 (design doc §3): machineClones14d has no display surface
+  // anywhere — a project's "clones 14d" chip silently included bot/CI clones
+  // with no disclosure at all.
+  describe("machine-clone disclosure on the project card", () => {
+    it("discloses machineClones14d alongside the human clone count when it's nonzero", () => {
+      const overview: Overview = {
+        projects: [summary({ project: "nightide", clones14d: 2, machineClones14d: 109 })],
+        topTodos: [],
+        suggestions: [],
+        sources: [],
+        sitePv7d: 0
+      };
+      const html = renderOverview(overview, false);
+      expect(html).toContain("clones 14d 2");
+      expect(html).toContain("109");
+      expect(html).toContain("机器");
+    });
+
+    it("adds no machine-clone note when machineClones14d is 0", () => {
+      const overview: Overview = {
+        projects: [summary({ project: "nightide", clones14d: 5, machineClones14d: 0 })],
+        topTodos: [],
+        suggestions: [],
+        sources: [],
+        sitePv7d: 0
+      };
+      const html = renderOverview(overview, false);
+      expect(html).not.toContain("机器");
+    });
   });
 });
 
@@ -194,6 +226,22 @@ describe("renderProject", () => {
       audit: []
     };
     expect(() => renderProject("nightide", empty, false)).not.toThrow();
+  });
+
+  // Review item 1: same disclosure requirement as the overview card, applied
+  // to the project detail page's own clone figures.
+  describe("machine-clone disclosure on the clone-count card", () => {
+    it("shows the machine clone count next to the human clones · 14d figure when nonzero", () => {
+      const withMachine: ProjectDetail = { ...detail, summary: summary({ clones14d: 2, machineClones14d: 109 }) };
+      const html = renderProject("nightide", withMachine, false);
+      expect(html).toContain("109");
+      expect(html).toContain("机器");
+    });
+
+    it("adds no machine-clone note when machineClones14d is 0", () => {
+      const html = renderProject("nightide", detail, false); // detail's summary() defaults machineClones14d to 0
+      expect(html).not.toContain("机器");
+    });
   });
 
   describe("event markers on the curves (design doc §5)", () => {

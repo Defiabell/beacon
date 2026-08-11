@@ -373,6 +373,41 @@ describe("routing edge cases", () => {
   });
 });
 
+// Review item 1: classifyDay (src/impact/classify.ts) already separates
+// machine-driven clones from human ones, but nothing summed it into the
+// project summary a page actually reads — clones14d silently added machine
+// traffic straight into the number shown as "clones 14d". These fixtures use
+// a fresh project (screen-coach has no rows from the shared beforeAll above)
+// so they don't disturb the exact-number assertions elsewhere in this file.
+describe("machine-clone disclosure (design doc §3 / review item 1)", () => {
+  const SCREEN_COACH = CONFIG.projects.find(p => p.name === "screen-coach")!;
+
+  it("ProjectSummary.clones14d counts only human clones; machineClones14d discloses the rest, never summed into it", async () => {
+    await db.upsertRepoDaily(env.DB, [
+      { repo: SCREEN_COACH.repo, date: "2026-08-01", views: 5, uniqueViews: 5, clones: 2, uniqueClones: 2, stars: 0, forks: 0 }, // human day
+      { repo: SCREEN_COACH.repo, date: "2026-08-02", views: 0, uniqueViews: 0, clones: 109, uniqueClones: 109, stars: 0, forks: 0 } // machine day (nightide-shaped)
+    ]);
+
+    const res = await call("GET", "/api/overview");
+    const body = await res!.json<Overview>();
+    const screenCoach = body.projects.find(p => p.project === "screen-coach")!;
+    expect(screenCoach.clones14d).toBe(2);
+    expect(screenCoach.machineClones14d).toBe(109);
+  });
+
+  // Isolated per-test storage (@cloudflare/vitest-pool-workers): this test
+  // seeds its own rows rather than relying on the previous `it`'s inserts.
+  it("buildProjectDetail's summary carries the same human/machine split", async () => {
+    await db.upsertRepoDaily(env.DB, [
+      { repo: SCREEN_COACH.repo, date: "2026-08-03", views: 0, uniqueViews: 0, clones: 40, uniqueClones: 40, stars: 0, forks: 0 }
+    ]);
+    const res = await call("GET", "/api/project/screen-coach");
+    const body = await res!.json<ProjectDetail>();
+    expect(body.summary.clones14d).toBe(0);
+    expect(body.summary.machineClones14d).toBe(40);
+  });
+});
+
 describe("sitePv7d", () => {
   it("is 0 when site_daily has no rows yet", async () => {
     const res = await call("GET", "/api/overview");
