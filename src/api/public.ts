@@ -5,16 +5,29 @@ import { CHANNELS, suggestPairs, type Suggestion } from "../channels";
 import {
   getStarSeries,
   getRepoSeries,
+  getAllRepoDaily,
   getLatestReferrers,
   listPosts,
+  listPostsForImpact,
   latestPostMetrics,
   listProjectChannels,
   listSourceRuns,
   listTodos,
   getTopOpenTodos,
   getSitePvSum,
-  listAuditResults
+  listAuditResults,
+  type PostForImpact
 } from "../db";
+import {
+  shiftDate,
+  buildEvents,
+  computeImpact,
+  computeImpacts,
+  type ImpactEvent,
+  type EventImpact,
+  type ImpactStatus,
+  type TodoEventInput
+} from "../impact/attribute";
 
 const REPO_SERIES_SUMMARY_DAYS = 14;
 const REPO_SERIES_DETAIL_DAYS = 90;
@@ -54,21 +67,42 @@ export interface ProjectDetail {
   referrers: ReferrerRow[];
   posts: PostWithMetrics[];
   audit: (CheckResult & { checkedAt: string })[];
+  // Optional (rather than required) so existing ProjectDetail literals built
+  // before this feature — tests, mainly — keep typechecking without every one
+  // of them needing an `events: []`. Always populated (possibly []) by
+  // buildProjectDetail below.
+  events?: EventImpact[];
+}
+
+// Compact summary of a post's impact, attached to a "posted" matrix cell that
+// has a postId link (design doc §5 — "附带该渠道对应帖子的实际效果"). `views`/
+// `starsDelta` are the after-window's own totals, not a delta against the
+// before-window baseline — subtracting two windows of possibly different
+// `days` (a still-collecting after-window has fewer recorded days than
+// before) would silently compare apples to oranges. `status`/`days` are
+// carried alongside for exactly the same honesty reason EventImpact carries
+// them: the UI must never show these numbers as a finished conclusion when
+// `status !== "complete"`.
+export interface MatrixEffect {
+  views: number;
+  humanClones: number;
+  starsDelta: number;
+  status: ImpactStatus;
+  days: number;
+}
+
+export interface MatrixCoverageRow {
+  project: string;
+  channelId: string;
+  status: string;
+  effect?: MatrixEffect;
 }
 
 export interface MatrixData {
   projects: string[];
   channels: { id: string; name: string; lang: string }[];
-  coverage: { project: string; channelId: string; status: string }[];
+  coverage: MatrixCoverageRow[];
   suggestions: Suggestion[];
-}
-
-// Shifts a "YYYY-MM-DD" date string by `deltaDays` (may be negative) using UTC
-// calendar arithmetic — avoids local-timezone drift shifting the date part.
-function shiftDate(date: string, deltaDays: number): string {
-  const d = new Date(`${date}T00:00:00Z`);
-  d.setUTCDate(d.getUTCDate() + deltaDays);
-  return d.toISOString().slice(0, 10);
 }
 
 // starsDelta7d = latest star count minus the count at (or nearest before) 7
@@ -131,6 +165,66 @@ function toCoverage(
   return rows.map(r => ({ project: r.project, channelId: r.channelId, status: r.status }));
 }
 
+// ---- impact (design doc §4) -------------------------------------------------
+
+// Shared by buildImpact/buildProjectDetail/buildMatrix below — every one of
+// them needs the full post/done-todo list to build ImpactEvent[] from, and
+// none of them should duplicate the "which todos have a doneAt" filtering.
+// listTodos(db, "done") always populates doneAt (see setTodoStatus) but the
+// Todo type itself still declares it optional, hence the filter+cast.
+async function fetchEventInputs(db: D1Database): Promise<{ postRows: PostForImpact[]; todoInputs: TodoEventInput[] }> {
+  const [postRows, doneTodos] = await Promise.all([listPostsForImpact(db), listTodos(db, "done")]);
+  const todoInputs: TodoEventInput[] = doneTodos
+    .filter((t): t is Todo & { doneAt: string } => !!t.doneAt)
+    .map(t => ({ project: t.project, title: t.title, doneAt: t.doneAt }));
+  return { postRows, todoInputs };
+}
+
+interface ProjectImpactData {
+  repoDaily: RepoDaily[];
+  starHistory: { date: string; stars: number }[];
+}
+
+// Full (unbounded) repo_daily + star_history per configured project — an
+// event's before/after window can fall anywhere in a project's history, not
+// just within the chart-oriented 14d/90d windows used elsewhere in this file.
+async function fetchImpactDataByProject(db: D1Database): Promise<Map<string, ProjectImpactData>> {
+  const entries = await Promise.all(
+    CONFIG.projects.map(async (p): Promise<readonly [string, ProjectImpactData]> => {
+      const [repoDaily, starHistory] = await Promise.all([getAllRepoDaily(db, p.repo), getStarSeries(db, p.repo)]);
+      return [p.name, { repoDaily, starHistory }] as const;
+    })
+  );
+  return new Map(entries);
+}
+
+// GET /api/impact (below) and /impact's SSR page (src/ui/pages.ts's
+// renderImpact) both read this directly.
+export async function buildImpact(env: Env): Promise<EventImpact[]> {
+  const db = env.DB;
+  const { postRows, todoInputs } = await fetchEventInputs(db);
+  const events = buildEvents(postRows, todoInputs);
+  const dataByProject = await fetchImpactDataByProject(db);
+  return computeImpacts(events, dataByProject);
+}
+
+// Keyed by posts.id — used by buildMatrix below to attach a MatrixEffect to
+// exactly the channel cell a given post was registered against (via
+// project_channels.post_id, set by the JSON admin API's PUT
+// /api/admin/channels — never by the no-JS /ui/channel form).
+async function buildImpactByPostId(env: Env): Promise<Map<number, EventImpact>> {
+  const impacts = await buildImpact(env);
+  return new Map(
+    impacts
+      .filter((i): i is EventImpact & { event: ImpactEvent & { postId: number } } => i.event.kind === "post" && i.event.postId != null)
+      .map(i => [i.event.postId, i])
+  );
+}
+
+function toMatrixEffect(impact: EventImpact): MatrixEffect {
+  return { views: impact.after.views, humanClones: impact.after.humanClones, starsDelta: impact.after.starsDelta, status: impact.status, days: impact.after.days };
+}
+
 export async function buildOverview(env: Env): Promise<Overview> {
   const db = env.DB;
   const [allPosts, coverageRows, sources, sitePv7d, topTodos] = await Promise.all([
@@ -152,13 +246,15 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   if (!project) return null;
 
   const db = env.DB;
-  const [starSeries, repoSeriesSummary, repoSeries, referrers, allPosts, audit] = await Promise.all([
+  const [starSeries, repoSeriesSummary, repoSeries, repoDailyAll, referrers, allPosts, audit, eventInputs] = await Promise.all([
     getStarSeries(db, project.repo),
     getRepoSeries(db, project.repo, REPO_SERIES_SUMMARY_DAYS),
     getRepoSeries(db, project.repo, REPO_SERIES_DETAIL_DAYS),
+    getAllRepoDaily(db, project.repo),
     getLatestReferrers(db, project.repo),
     listPosts(db),
-    listAuditResults(db, project.name)
+    listAuditResults(db, project.name),
+    fetchEventInputs(db)
   ]);
   const projectPosts = allPosts.filter(p => p.project === project.name);
   const posts: PostWithMetrics[] = await Promise.all(
@@ -166,17 +262,37 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   );
   const summary = computeProjectSummary(project, starSeries, repoSeriesSummary, referrers, projectPosts.length);
 
-  return { summary, repoSeries, starSeries, referrers, posts, audit };
+  // starSeries above is already full (unbounded) history — getStarSeries has
+  // no `days` limit, unlike getRepoSeries — so it's reused as-is for impact;
+  // only repo_daily needed the separate unbounded fetch (repoDailyAll).
+  const events = buildEvents(eventInputs.postRows, eventInputs.todoInputs).filter(e => e.project === project.name);
+  const projectEvents = events.map(e => computeImpact(e, repoDailyAll, starSeries));
+
+  return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents };
 }
 
 export async function buildMatrix(env: Env): Promise<MatrixData> {
   const db = env.DB;
-  const coverage = toCoverage(await listProjectChannels(db));
+  const rawCoverage = await listProjectChannels(db);
+  const coverage = toCoverage(rawCoverage);
   const suggestions = suggestPairs(CONFIG.projects, coverage);
+
+  // The impact fetch (buildImpact runs the full events + per-project
+  // repo_daily/star_history pipeline) is only worth its cost when there's at
+  // least one posted+postId-linked cell to attach it to.
+  const postedWithPostId = rawCoverage.filter(r => r.status === "posted" && r.postId != null);
+  const impactByPostId = postedWithPostId.length > 0 ? await buildImpactByPostId(env) : new Map<number, EventImpact>();
+
+  const richCoverage: MatrixCoverageRow[] = coverage.map(c => {
+    const raw = rawCoverage.find(r => r.project === c.project && r.channelId === c.channelId);
+    const impact = raw?.postId != null ? impactByPostId.get(raw.postId) : undefined;
+    return { ...c, effect: impact ? toMatrixEffect(impact) : undefined };
+  });
+
   return {
     projects: CONFIG.projects.map(p => p.name),
     channels: CHANNELS.map(c => ({ id: c.id, name: c.name, lang: c.lang })),
-    coverage,
+    coverage: richCoverage,
     suggestions
   };
 }
@@ -229,6 +345,7 @@ export async function handlePublicApi(req: Request, env: Env, path: string): Pro
   if (path === "/api/overview") return jsonOk(await buildOverview(env));
   if (path === "/api/matrix") return jsonOk(await buildMatrix(env));
   if (path === "/api/posts") return jsonOk(await buildPostsWithMetrics(env));
+  if (path === "/api/impact") return jsonOk(await buildImpact(env));
   if (path === "/api/health") return jsonOk(await listSourceRuns(env.DB));
 
   if (path === "/api/todos") {

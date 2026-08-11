@@ -325,6 +325,7 @@ describe("response headers on every 200", () => {
     ["GET", "/api/overview"],
     ["GET", "/api/matrix"],
     ["GET", "/api/posts"],
+    ["GET", "/api/impact"],
     ["GET", "/api/health"],
     ["GET", "/api/todos"],
     ["GET", "/api/project/nightide"]
