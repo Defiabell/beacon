@@ -534,11 +534,21 @@ const EVENT_KIND_LABELS: Record<string, string> = { post: "发帖", todo: "待�
 // bare number reads as "this did nothing", which is the single most damaging
 // thing this page could say. Hence the caveat travels inside the row, next to
 // the very numbers it qualifies, rather than living in a page-level footnote.
-function windowCell(label: string, w: ImpactWindow, partial: boolean): string {
-  const note = partial ? `<span class="win-note">统计中 · 已有 ${w.days}/7 天</span>` : "";
+//
+// `note` is caller-supplied text (rather than a boolean) because the two
+// windows need different wording for the same underlying fact (review items
+// 4/5): an incomplete *after* window is temporary ("统计中" — more days will
+// land), but a short *before* window is permanent — that history predates
+// collection and will never grow — so reusing "统计中" there would promise
+// data that's never coming. Empty string renders no caveat at all.
+function windowCell(label: string, w: ImpactWindow, note: string): string {
+  const noteHtml = note ? `<span class="win-note">${esc(note)}</span>` : "";
   return (
-    `<div class="win"><div class="win-h">${esc(label)}${note}</div>` +
-    `<div class="win-n"><span>浏览 ${w.views}</span><span>clone ${w.humanClones}</span>` +
+    `<div class="win"><div class="win-h">${esc(label)}${noteHtml}</div>` +
+    // "人类" (review item 6): this figure is classifyDay-filtered (human-only),
+    // unlike the raw/unfiltered clone curve on the project detail page — the
+    // label is what stops a reader from conflating the two measures.
+    `<div class="win-n"><span>浏览 ${w.views}</span><span>人类 clone ${w.humanClones}</span>` +
     `<span>star ${deltaArrow(w.starsDelta)}</span></div></div>`
   );
 }
@@ -554,14 +564,25 @@ function impactRow(i: EventImpact): string {
     ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a>`
     : esc(e.title);
   const platform = e.platform ? `<span class="platform">${esc(PLATFORM_LABELS[e.platform] ?? e.platform)}</span>` : "";
+  // Review item 4: gated on each window's own day count, not on the row's
+  // overall `status` — `status` resolves to "collecting" whenever the *after*
+  // window is short (design doc §4's "after wins" priority), which used to
+  // leave a short *before* window with no caveat at all whenever both windows
+  // were short, silently rendering a partial sum as a settled number.
+  //
+  // Review item 5: the before-window's own wording ("历史仅 N 天") states the
+  // day count without implying more will arrive — unlike the after-window's
+  // "统计中", that history predates collection and never grows.
+  const beforeNote = i.before.days < 7 ? `历史仅 ${i.before.days} 天` : "";
+  const afterNote = i.status === "collecting" ? `统计中 · 已有 ${i.after.days}/7 天` : "";
   return (
     `<li><div class="ev-head"><span class="ev-date">${esc(e.date)}</span>` +
     `<span class="src">${esc(kind)}</span>${platform}` +
     `<a class="proj" href="/p/${encodeURIComponent(e.project)}">${esc(e.project)}</a>` +
     `<span class="ev-title ${cls}">${title}</span></div>` +
-    `<div class="ev-wins">${windowCell("之前 7 天", i.before, i.status === "insufficient-history")}` +
+    `<div class="ev-wins">${windowCell("之前 7 天", i.before, beforeNote)}` +
     `<span class="ev-arrow">→</span>` +
-    `${windowCell("之后 7 天", i.after, i.status === "collecting")}</div></li>`
+    `${windowCell("之后 7 天", i.after, afterNote)}</div></li>`
   );
 }
 

@@ -642,6 +642,61 @@ describe("renderImpact", () => {
     expect(html).not.toContain('class="ok"'); // not rendered as a confident "complete" conclusion
   });
 
+  // Review item 4: windowCell's before-window caveat used to be gated on
+  // `status === "insufficient-history"` — but status resolves to "collecting"
+  // whenever the *after* window is short too (design doc §4's "after wins"
+  // priority), which silently dropped the before-window's own caveat exactly
+  // when both windows were short. The fix gates each window on its own day
+  // count, independent of the row's overall status.
+  describe("honesty rule: before-window caveat gates on the window itself, not on overall status", () => {
+    it("a short before-window still carries its own caveat even when the row's overall status is 'collecting'", () => {
+      const bothShort = impact({
+        before: { days: 3, views: 5, humanClones: 0, starsDelta: 0 },
+        after: { days: 2, views: 0, humanClones: 0, starsDelta: 0 },
+        status: "collecting"
+      });
+      const html = renderImpact([bothShort], false);
+      const li = impactRows(html)[0];
+      const [beforeHtml, afterHtml] = li.split('<span class="ev-arrow">→</span>');
+      expect(beforeHtml).toContain("win-note");
+      expect(beforeHtml).toContain("3");
+      expect(afterHtml).toContain("win-note"); // after's own (independent) collecting caveat is unaffected
+    });
+
+    it("a full (7-day) before-window carries no caveat even when the row's overall status is 'collecting'", () => {
+      const onlyAfterShort = impact({
+        before: { days: 7, views: 21, humanClones: 1, starsDelta: 0 },
+        after: { days: 2, views: 0, humanClones: 0, starsDelta: 0 },
+        status: "collecting"
+      });
+      const html = renderImpact([onlyAfterShort], false);
+      const li = impactRows(html)[0];
+      const [beforeHtml] = li.split('<span class="ev-arrow">→</span>');
+      expect(beforeHtml).not.toContain("win-note");
+    });
+  });
+
+  // Review item 5: an insufficient-history before-window used to reuse the
+  // after-window's "统计中" wording, which implies more data is still coming —
+  // but that history predates collection and will never grow. It needs its
+  // own phrasing that states the day count without that implication.
+  it("an insufficient-history before-window states its day count without the 'still collecting' wording", () => {
+    const shortBefore = impact({ before: { days: 2, views: 5, humanClones: 0, starsDelta: 0 }, status: "insufficient-history" });
+    const html = renderImpact([shortBefore], false);
+    const li = impactRows(html)[0];
+    const [beforeHtml] = li.split('<span class="ev-arrow">→</span>');
+    expect(beforeHtml).not.toContain("统计中");
+    expect(beforeHtml).toContain("2");
+  });
+
+  // Review item 6: the impact row's clone figure is human-only (classifyDay-
+  // filtered), but sits right next to the project page's raw (unfiltered)
+  // clone curve with nothing distinguishing the two measures.
+  it("labels the clone figure as human-only so it can't be conflated with the project page's raw clone curve", () => {
+    const html = renderImpact([impact()], false);
+    expect(html).toContain("人类 clone");
+  });
+
   it("links a post event's title to its URL; a todo event has no link", () => {
     const html = renderImpact([impact()], false);
     expect(html).toContain('href="https://www.v2ex.com/t/1229945"');
