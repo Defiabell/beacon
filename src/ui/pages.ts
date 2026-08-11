@@ -9,10 +9,11 @@
 // doesn't (yet) carry what the mockup shows.
 import type { Overview, ProjectDetail, MatrixData, PostWithMetrics, ProjectSummary } from "../api/public";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
+import type { EventImpact, ImpactWindow } from "../impact/attribute";
 import { CONFIG } from "../config";
-import { page, svgSparkline, esc } from "./layout";
+import { page, svgSparkline, esc, type SparkMarker } from "./layout";
 
-type NavKey = "overview" | "matrix" | "todos" | "posts" | null;
+type NavKey = "overview" | "matrix" | "todos" | "posts" | "impact" | null;
 
 const SOURCE_LABELS: Record<string, string> = { audit: "体检", matrix: "矩阵", manual: "手动" };
 const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", audit: "体检" };
@@ -56,7 +57,7 @@ function navHeader(active: NavKey, authed: boolean): string {
   return (
     `<header><span class="logo">beacon</span><nav>` +
     `${link("/", "总览", "overview")}${link("/matrix", "渠道矩阵", "matrix")}` +
-    `${link("/todos", "待办", "todos")}${link("/posts", "帖子", "posts")}` +
+    `${link("/todos", "待办", "todos")}${link("/posts", "帖子", "posts")}${link("/impact", "效果", "impact")}` +
     `${authLink(authed)}` +
     `</nav></header>`
   );
@@ -218,12 +219,29 @@ function postsTable(rows: PostWithMetrics[], opts: { showProject: boolean; showD
   return `<div class="scroll"><table><tr>${head}</tr>${body}</table></div>`;
 }
 
+// Maps each event onto its index in a dated series so svgSparkline can draw a
+// vertical marker there — the point of the whole feature is that a spike and
+// the action that caused it line up visually. An event whose date isn't in
+// this particular series (older than the chart window, or a day GitHub never
+// reported) is dropped rather than clamped to an edge: a marker on the wrong
+// day would assert a causal link that isn't there.
+function eventMarkers(events: EventImpact[] | undefined, dates: string[]): SparkMarker[] {
+  if (!events) return [];
+  const indexOfDate = new Map(dates.map((d, i) => [d, i]));
+  return events.flatMap(e => {
+    const index = indexOfDate.get(e.event.date);
+    return index === undefined ? [] : [{ index, label: `${e.event.date} ${e.event.title}` }];
+  });
+}
+
 export function renderProject(name: string, d: ProjectDetail, authed: boolean): string {
   const s = d.summary;
   const failCount = d.audit.filter(a => a.status === "fail").length;
-  const starSpark = svgSparkline(d.starSeries.map(r => r.stars), 640, 90);
-  const viewsSpark = svgSparkline(d.repoSeries.map(r => r.views), 300, 48);
-  const clonesSpark = svgSparkline(d.repoSeries.map(r => r.clones), 300, 48);
+  const starMarks = eventMarkers(d.events, d.starSeries.map(r => r.date));
+  const repoMarks = eventMarkers(d.events, d.repoSeries.map(r => r.date));
+  const starSpark = svgSparkline(d.starSeries.map(r => r.stars), 640, 90, starMarks);
+  const viewsSpark = svgSparkline(d.repoSeries.map(r => r.views), 300, 48, repoMarks);
+  const clonesSpark = svgSparkline(d.repoSeries.map(r => r.clones), 300, 48, repoMarks);
   const header = `<header><span class="logo">beacon</span><nav><a href="/">← 返回总览</a>${authLink(authed)}</nav></header>`;
 
   const body = `${header}
@@ -481,4 +499,57 @@ ${error ? `<p class="error-text">令牌错误，请重试。</p>` : ""}
 </form>
 </main>`;
   return page("beacon · 登录", body);
+}
+
+// ---- impact ----------------------------------------------------------------
+
+const EVENT_KIND_LABELS: Record<string, string> = { post: "发帖", todo: "待办" };
+
+// A window's numbers are only ever a *conclusion* when its 7 days are all
+// reported. GitHub's traffic feed ends at "yesterday" and beacon's 01:00 UTC
+// cron usually sees one day less than that, so a freshly-published post has an
+// after-window that is genuinely incomplete — and showing its partial sum as a
+// bare number reads as "this did nothing", which is the single most damaging
+// thing this page could say. Hence the caveat travels inside the row, next to
+// the very numbers it qualifies, rather than living in a page-level footnote.
+function windowCell(label: string, w: ImpactWindow, partial: boolean): string {
+  const note = partial ? `<span class="win-note">统计中 · 已有 ${w.days}/7 天</span>` : "";
+  return (
+    `<div class="win"><div class="win-h">${esc(label)}${note}</div>` +
+    `<div class="win-n"><span>浏览 ${w.views}</span><span>clone ${w.humanClones}</span>` +
+    `<span>star ${deltaArrow(w.starsDelta)}</span></div></div>`
+  );
+}
+
+function impactRow(i: EventImpact): string {
+  const e = i.event;
+  const kind = EVENT_KIND_LABELS[e.kind] ?? e.kind;
+  // Only a "complete" row earns the confident styling; the other two states
+  // stay visually distinct so a glance can't mistake a provisional number for
+  // a settled one.
+  const cls = i.status === "complete" ? "ok" : i.status === "collecting" ? "pending" : "partial";
+  const title = e.url
+    ? `<a href="${esc(e.url)}" target="_blank" rel="noopener">${esc(e.title)}</a>`
+    : esc(e.title);
+  const platform = e.platform ? `<span class="platform">${esc(PLATFORM_LABELS[e.platform] ?? e.platform)}</span>` : "";
+  return (
+    `<li><div class="ev-head"><span class="ev-date">${esc(e.date)}</span>` +
+    `<span class="src">${esc(kind)}</span>${platform}` +
+    `<a class="proj" href="/p/${encodeURIComponent(e.project)}">${esc(e.project)}</a>` +
+    `<span class="ev-title ${cls}">${title}</span></div>` +
+    `<div class="ev-wins">${windowCell("之前 7 天", i.before, i.status === "insufficient-history")}` +
+    `<span class="ev-arrow">→</span>` +
+    `${windowCell("之后 7 天", i.after, i.status === "collecting")}</div></li>`
+  );
+}
+
+export function renderImpact(impacts: EventImpact[], authed: boolean): string {
+  const rows = impacts.map(impactRow).join("");
+  const body = `${navHeader("impact", authed)}
+<main>
+<h1>效果归因</h1>
+<p class="lead">每一次发帖、每一条做完的待办，对照它前后 7 天的真实数字。窗口未采满的行会标注「统计中」——那不是结论，别当成没效果。</p>
+${rows ? `<ol class="impact">${rows}</ol>` : `<p class="sub">暂无事件。登记一篇帖子或做完一条待办，这里就会出现它的效果。</p>`}
+</main>`;
+  return page("beacon · 效果归因", body);
 }

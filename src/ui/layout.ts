@@ -197,6 +197,25 @@ details.add-post { margin-bottom: 16px; }
 details.add-post summary { cursor: pointer; font-weight: 600; color: var(--series-1); list-style: none; }
 details.add-post summary::-webkit-details-marker { display: none; }
 details.add-post[open] summary { margin-bottom: 4px; }
+/* Impact rows. The two windows sit side by side with an arrow between them so
+   before→after reads as one movement rather than two unrelated figures. The
+   "统计中" note is styled as a warning (not muted) because an incomplete
+   window is the one state a reader must not skim past as a settled zero. */
+ol.impact { list-style: none; margin: 0; padding: 0; }
+ol.impact li { padding: 14px 0; border-top: 1px solid var(--grid); }
+ol.impact li:first-child { border-top: 0; }
+.ev-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 14px; }
+.ev-date { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ev-title { font-weight: 550; }
+.ev-title a { color: inherit; text-decoration: none; }
+.ev-title a:hover { color: var(--series-1); }
+.ev-title.pending, .ev-title.partial { color: var(--ink-2); font-weight: 500; }
+.ev-wins { display: flex; align-items: center; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
+.ev-arrow { color: var(--muted); font-size: 15px; }
+.win { border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; min-width: 190px; }
+.win-h { font-size: 11px; color: var(--muted); display: flex; gap: 6px; align-items: baseline; }
+.win-n { display: flex; gap: 12px; font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.win-note { color: var(--p2); font-weight: 600; }
 `;
 
 // Full HTML document shell: doctype, head (charset/viewport/title/inline

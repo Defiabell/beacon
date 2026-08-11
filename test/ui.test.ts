@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { esc, svgSparkline, page } from "../src/ui/layout";
-import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderLogin } from "../src/ui/pages";
+import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderLogin, renderImpact } from "../src/ui/pages";
 import type { Overview, ProjectDetail, MatrixData, PostWithMetrics, ProjectSummary } from "../src/api/public";
 import type { Todo } from "../src/types";
+import type { EventImpact } from "../src/impact/attribute";
 import { CONFIG } from "../src/config";
 
 describe("esc", () => {
@@ -193,6 +194,47 @@ describe("renderProject", () => {
       audit: []
     };
     expect(() => renderProject("nightide", empty, false)).not.toThrow();
+  });
+
+  describe("event markers on the curves (design doc §5)", () => {
+    it("with no events field at all (pre-feature ProjectDetail shape), renders no marker lines", () => {
+      const html = renderProject("nightide", detail, false);
+      expect(html).not.toContain('class="marker"');
+    });
+
+    it("an event whose date matches a repoSeries/starSeries date draws a marker, with an escaped label tooltip", () => {
+      const withEvent: ProjectDetail = {
+        ...detail,
+        events: [
+          {
+            event: { kind: "post", date: "2026-07-31", project: "nightide", title: "<b>发帖</b>", platform: "v2ex", url: "https://x" },
+            before: { days: 7, views: 10, humanClones: 0, starsDelta: 0 },
+            after: { days: 7, views: 20, humanClones: 0, starsDelta: 1 },
+            status: "complete"
+          }
+        ]
+      };
+      const html = renderProject("nightide", withEvent, false);
+      expect(html).toContain('class="marker"');
+      expect(html).not.toContain("<b>发帖</b>");
+      expect(html).toContain("&lt;b&gt;发帖&lt;/b&gt;");
+    });
+
+    it("an event whose date isn't present in either series draws no marker, without crashing", () => {
+      const withOutOfRangeEvent: ProjectDetail = {
+        ...detail,
+        events: [
+          {
+            event: { kind: "todo", date: "2020-01-01", project: "nightide", title: "太久以前" },
+            before: { days: 0, views: 0, humanClones: 0, starsDelta: 0 },
+            after: { days: 0, views: 0, humanClones: 0, starsDelta: 0 },
+            status: "collecting"
+          }
+        ]
+      };
+      expect(() => renderProject("nightide", withOutOfRangeEvent, false)).not.toThrow();
+      expect(renderProject("nightide", withOutOfRangeEvent, false)).not.toContain('class="marker"');
+    });
   });
 });
 
@@ -412,6 +454,109 @@ describe("renderPosts", () => {
       expect(html).not.toContain("/ui/post");
       expect(html).not.toContain("＋ 登记帖子");
     });
+  });
+});
+
+// ---- renderImpact -----------------------------------------------------------
+
+function impact(over: Partial<EventImpact> = {}): EventImpact {
+  return {
+    event: { kind: "post", date: "2026-08-09", project: "shotsync", title: "shotsync 分享创造", platform: "v2ex", url: "https://www.v2ex.com/t/1229945" },
+    before: { days: 7, views: 21, humanClones: 1, starsDelta: 0 },
+    after: { days: 7, views: 60, humanClones: 3, starsDelta: 2 },
+    status: "complete",
+    ...over
+  };
+}
+
+// Rows must be extracted from the impact list itself: a bare /<li>...<\/li>/
+// against the whole document matches the "<li>" that appears inside layout.ts's
+// CSS comment first, silently widening the "row" to include the stylesheet and
+// header — which would let the honesty assertions below pass on text that isn't
+// in the row at all.
+function impactRows(html: string): string[] {
+  const list = html.match(/<ol class="impact">[\s\S]*?<\/ol>/);
+  if (!list) return [];
+  return list[0].match(/<li>[\s\S]*?<\/li>/g) ?? [];
+}
+
+describe("renderImpact", () => {
+  it("lists an event with its project, action, and before/after numbers", () => {
+    const html = renderImpact([impact()], false);
+    expect(html).toContain("shotsync");
+    expect(html).toContain("shotsync 分享创造");
+    expect(html).toContain("2026-08-09");
+    expect(html).toContain("21");
+    expect(html).toContain("60");
+  });
+
+  it("doesn't crash on an empty list, and shows a placeholder", () => {
+    expect(() => renderImpact([], false)).not.toThrow();
+    expect(renderImpact([], false)).toContain("暂无事件");
+  });
+
+  it("escapes a malicious event title rather than injecting it raw", () => {
+    const html = renderImpact([impact({ event: { ...impact().event, title: "<script>alert(1)</script>" } })], false);
+    expect(html).not.toContain("<script>alert(1)</script>");
+    expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
+  });
+
+  // The honesty rule (design doc §4/§7, the thing most likely to be got
+  // wrong): an incomplete after-window must never read as a confirmed,
+  // final zero. Structurally, this means the row's "collecting" caveat and
+  // its day count must sit in the same list item as the numbers themselves —
+  // not just be present somewhere on the page.
+  describe("honesty rule: collecting status", () => {
+    it("a collecting after-window shows its actual (possibly 0) numbers, but never without the collecting caveat + day count in the same row", () => {
+      const collecting = impact({
+        after: { days: 1, views: 0, humanClones: 0, starsDelta: 0 },
+        status: "collecting"
+      });
+      const html = renderImpact([collecting], false);
+      const li = impactRows(html)[0];
+      expect(li).toContain("统计中");
+      expect(li).toContain("1"); // the day count, "已有 1/7 天" or equivalent
+      expect(li).toContain("7");
+    });
+
+    it("never claims a plain 'no effect'/'0 impact' conclusion phrase for a collecting row", () => {
+      const collecting = impact({ after: { days: 2, views: 0, humanClones: 0, starsDelta: 0 }, status: "collecting" });
+      const html = renderImpact([collecting], false);
+      expect(html).not.toContain("无效果");
+      expect(html).not.toContain("没有效果");
+    });
+  });
+
+  it("an insufficient-history row is still shown (not hidden) but is visually distinct from a complete one", () => {
+    const insufficient = impact({ before: { days: 2, views: 5, humanClones: 0, starsDelta: 0 }, status: "insufficient-history" });
+    const html = renderImpact([insufficient], false);
+    expect(html).toContain("shotsync");
+    expect(html).not.toContain('class="ok"'); // not rendered as a confident "complete" conclusion
+  });
+
+  it("links a post event's title to its URL; a todo event has no link", () => {
+    const html = renderImpact([impact()], false);
+    expect(html).toContain('href="https://www.v2ex.com/t/1229945"');
+
+    const todoImpact = impact({ event: { kind: "todo", date: "2026-08-01", project: "nightide", title: "补 topics" } });
+    const todoHtml = renderImpact([todoImpact], false);
+    expect(todoHtml).toContain("补 topics");
+    // Scoped to the row, not the document: the page always carries nav and
+    // login <a> elements, so asserting on the whole HTML would be testing the
+    // header rather than the claim ("a todo event has no link").
+    // The claim is about the *title*: a post links out to where it was
+    // published, a todo has nowhere to go. Asserting "no <a> anywhere in the
+    // row" would also forbid the project chip's link to /p/:project, which is
+    // useful navigation and has nothing to do with this behaviour.
+    const todoTitle = impactRows(todoHtml)[0].match(/<span class="ev-title[^"]*">[\s\S]*?<\/span>/)![0];
+    expect(todoTitle).not.toContain("<a");
+    const postTitle = impactRows(html)[0].match(/<span class="ev-title[^"]*">[\s\S]*?<\/span>/)![0];
+    expect(postTitle).toContain('href="https://www.v2ex.com/t/1229945"');
+  });
+
+  it("carries the login/logout header link like every other page", () => {
+    expect(renderImpact([], false)).toContain('<a href="/login">登录</a>');
+    expect(renderImpact([], true)).toContain("登出");
   });
 });
 
