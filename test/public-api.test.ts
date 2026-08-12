@@ -292,7 +292,14 @@ describe("GET /api/matrix", () => {
     const body = await res!.json<MatrixData>();
     expect(body.projects).toEqual(CONFIG.projects.map(p => p.name));
     expect(body.channels).toHaveLength(CHANNELS.length);
-    expect(body.channels[0]).toEqual({ id: CHANNELS[0].id, name: CHANNELS[0].name, lang: CHANNELS[0].lang });
+    expect(body.channels[0]).toEqual({
+      id: CHANNELS[0].id,
+      name: CHANNELS[0].name,
+      lang: CHANNELS[0].lang,
+      url: CHANNELS[0].url,
+      kind: CHANNELS[0].kind,
+      howTo: CHANNELS[0].howTo
+    });
     expect(body.coverage).toEqual([{ project: "nightide", channelId: "v2ex", status: "posted" }]);
     expect(body.suggestions.some(s => s.project === "nightide" && s.channelId === "v2ex")).toBe(false);
   });

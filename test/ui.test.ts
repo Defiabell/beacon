@@ -109,6 +109,27 @@ describe("renderOverview", () => {
     expect(html).toContain("fix readme link");
   });
 
+  // A channel suggestion used to link to bare /matrix, dropping the reader at
+  // the top of a 26-column table with no statement of what to do. It now points
+  // at that channel's own how-to entry (renderMatrix's `id="ch-<id>"`).
+  it("links a channel suggestion to that channel's how-to anchor, not just to /matrix", () => {
+    const overview: Overview = {
+      projects: [],
+      topTodos: [],
+      suggestions: [{ project: "shotsync", channelId: "show-hn", channelName: "Show HN", score: 4 }],
+      sources: [],
+      sitePv7d: 0
+    };
+    const html = renderOverview(overview, false);
+    // Matched as the whole rendered element rather than as two document-wide
+    // substrings: the inlined stylesheet (src/ui/layout.ts) carries both the
+    // `.go` selector and the literal string 「怎么发」 in its own comment, so a
+    // bare toContain on either would risk passing on the CSS alone — the exact
+    // trap that produced two vacuous tests in this file's history.
+    const goLink = html.match(/<a class="go"[^>]*>[^<]*<\/a>/)?.[0] ?? "";
+    expect(goLink).toBe('<a class="go" href="/matrix#ch-show-hn">怎么发 →</a>');
+  });
+
   it("escapes a malicious todo title rather than injecting it raw", () => {
     const overview: Overview = {
       projects: [],
@@ -290,9 +311,9 @@ describe("renderMatrix", () => {
   const matrix: MatrixData = {
     projects: ["nightide"],
     channels: [
-      { id: "v2ex", name: "V2EX", lang: "zh" },
-      { id: "hn", name: "Show HN", lang: "en" },
-      { id: "jike", name: "即刻", lang: "zh" }
+      { id: "v2ex", name: "V2EX", lang: "zh", url: "https://www.v2ex.com/go/create", kind: "post", howTo: "去分享创造节点发帖，配一张截图。" },
+      { id: "hn", name: "Show HN", lang: "en", url: "https://news.ycombinator.com/showhn.html", kind: "post", howTo: "标题用 Show HN 前缀，发完自己回一条。" },
+      { id: "jike", name: "即刻", lang: "zh", url: "https://web.okjike.com", kind: "listing", howTo: "建一个长期挂着的页面，靠平台搜索带人。" }
     ],
     coverage: [
       { project: "nightide", channelId: "v2ex", status: "posted" },
@@ -300,6 +321,70 @@ describe("renderMatrix", () => {
     ],
     suggestions: [{ project: "nightide", channelId: "hn", channelName: "Show HN", score: 2 }]
   };
+
+  // Every assertion below is scoped to the fragment it's about (<thead>, or the
+  // 怎么发 <section>) rather than searched document-wide: src/ui/layout.ts's
+  // shared stylesheet — inlined into every page — literally contains the class
+  // names (`a.ch-name`, `ul.ch-list`, `.lang-inline`) and the Chinese string
+  // 「怎么发」 inside its own selectors and comments, so a whole-document
+  // substring check on any of them would pass whether renderMatrix emits the
+  // markup or not. This exact trap has produced two vacuously-passing tests in
+  // this file's history.
+  function thead(html: string): string {
+    return html.match(/<thead>[\s\S]*?<\/thead>/)?.[0] ?? "";
+  }
+  function howto(html: string): string {
+    return html.match(/<section class="howto">[\s\S]*?<\/section>/)?.[0] ?? "";
+  }
+
+  describe("channel how-to (a scored cell has to say what the action actually is)", () => {
+    it("the header turns each channel name into a link out, tagged with its action kind", () => {
+      const head = thead(renderMatrix(matrix, false));
+      expect(head).toContain('<a class="ch-name" href="https://www.v2ex.com/go/create" target="_blank" rel="noopener">V2EX</a>');
+      expect(head).toContain("发帖 · 中");
+      expect(head).toContain("登记条目 · 中"); // 即刻's kind in this fixture
+      expect(head).toContain('title="去分享创造节点发帖，配一张截图。"');
+    });
+
+    it("emits an anchorable how-to entry per channel, carrying that channel's own instruction text", () => {
+      const section = howto(renderMatrix(matrix, false));
+      expect(section).not.toBe("");
+      for (const c of matrix.channels) {
+        expect(section).toContain(`id="ch-${c.id}"`);
+        expect(section).toContain(c.howTo);
+      }
+    });
+
+    it("groups entries by action kind, and never drops a channel whose kind is unrecognized", () => {
+      const withUnknownKind: MatrixData = {
+        ...matrix,
+        channels: [
+          ...matrix.channels,
+          { id: "mystery", name: "未知渠道", lang: "zh", url: "https://example.com", kind: "carrier-pigeon" as never, howTo: "谁知道该怎么发。" }
+        ]
+      };
+      const section = howto(renderMatrix(withUnknownKind, false));
+      // Two known groups (post ×2, listing ×1) plus the leftover one.
+      expect(section).toContain("发帖 · 2 个渠道");
+      expect(section).toContain("登记条目 · 1 个渠道");
+      expect(section).toContain('id="ch-mystery"');
+      expect(section).toContain("谁知道该怎么发。");
+    });
+
+    it("escapes a channel's howTo in both the header title attribute and the how-to body", () => {
+      const hostile: MatrixData = {
+        ...matrix,
+        channels: [
+          { id: "evil", name: "x", lang: "zh", url: "https://example.com", kind: "post", howTo: '"><script>alert(1)</script>' }
+        ],
+        coverage: [],
+        suggestions: []
+      };
+      const html = renderMatrix(hostile, false);
+      expect(html).not.toContain("<script>alert(1)</script>");
+      expect(howto(html)).toContain("&lt;script&gt;");
+    });
+  });
 
   it("renders posted (✓), planned (◷), na (—), and scored-suggestion cells", () => {
     const html = renderMatrix(matrix, false);
@@ -351,7 +436,9 @@ describe("renderMatrix", () => {
   describe("posted cell effect (design doc §5 / review item 2)", () => {
     const matrixWithEffect: MatrixData = {
       projects: ["nightide"],
-      channels: [{ id: "v2ex", name: "V2EX", lang: "zh" }],
+      channels: [
+        { id: "v2ex", name: "V2EX", lang: "zh", url: "https://www.v2ex.com/go/create", kind: "post", howTo: "去分享创造节点发帖，配一张截图。" }
+      ],
       coverage: [
         {
           project: "nightide",

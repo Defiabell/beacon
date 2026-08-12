@@ -1,7 +1,7 @@
 import type { Env, RepoDaily, ReferrerRow, Post, PostMetrics, Todo, CheckResult, SourceRun } from "../types";
 import type { ProjectConfig } from "../config";
 import { CONFIG } from "../config";
-import { CHANNELS, suggestPairs, type Suggestion } from "../channels";
+import { CHANNELS, suggestPairs, type Suggestion, type ChannelKind } from "../channels";
 import { classifyDay } from "../impact/classify";
 import {
   getStarSeries,
@@ -106,9 +106,24 @@ export interface MatrixCoverageRow {
   effect?: MatrixEffect;
 }
 
+// `url`/`kind`/`howTo` all already existed on src/channels.ts's Channel but
+// were dropped on the way out of buildMatrix, so a reader of the matrix saw a
+// channel *name* with no way to reach it and no statement of what "posting"
+// there even involves — the gap that made the page unusable without someone
+// explaining it. They're plain editorial constants (no per-project state), so
+// exposing them costs nothing beyond payload size.
+export interface MatrixChannel {
+  id: string;
+  name: string;
+  lang: string;
+  url: string;
+  kind: ChannelKind;
+  howTo: string;
+}
+
 export interface MatrixData {
   projects: string[];
-  channels: { id: string; name: string; lang: string }[];
+  channels: MatrixChannel[];
   coverage: MatrixCoverageRow[];
   suggestions: Suggestion[];
 }
@@ -308,7 +323,7 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
 
   return {
     projects: CONFIG.projects.map(p => p.name),
-    channels: CHANNELS.map(c => ({ id: c.id, name: c.name, lang: c.lang })),
+    channels: CHANNELS.map(c => ({ id: c.id, name: c.name, lang: c.lang, url: c.url, kind: c.kind, howTo: c.howTo })),
     coverage: richCoverage,
     suggestions
   };

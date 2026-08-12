@@ -7,7 +7,8 @@
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, MatrixData, MatrixCoverageRow, MatrixEffect, PostWithMetrics, ProjectSummary } from "../api/public";
+import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, PostWithMetrics, ProjectSummary } from "../api/public";
+import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, ImpactWindow } from "../impact/attribute";
 import { CONFIG } from "../config";
@@ -61,6 +62,17 @@ function navHeader(active: NavKey, authed: boolean): string {
     `${authLink(authed)}` +
     `</nav></header>`
   );
+}
+
+// The fragment name a channel's how-to entry is anchored under. Two places
+// interpolate it — the overview's suggestion href (`/matrix#…`, via
+// encodeURIComponent) and the entry's own `id` attribute (via esc) — and a deep
+// link lands nowhere at all if the two ever disagree. Routing both through one
+// function is what keeps the pair in lockstep; test/channels.test.ts pins
+// channel ids to plain slugs, on which esc() and encodeURIComponent() are both
+// the identity, which is why the differing escapes are safe here.
+function channelAnchorId(channelId: string): string {
+  return `ch-${channelId}`;
 }
 
 function projectTagsLabel(name: string): string {
@@ -130,8 +142,12 @@ function actionItems(o: Overview): ActionItem[] {
           priClass: "",
           srcLabel: "矩阵",
           title: `${s.project} → ${s.channelName}（适配分 ${s.score}）`,
-          href: "/matrix",
-          linkLabel: "看渠道 →"
+          // Deep-links to that channel's own how-to entry (renderMatrix's
+          // howToGroup anchors one per channel), not just to /matrix — a
+          // suggestion that drops you at the top of a 26-column table doesn't
+          // tell you what to actually do next.
+          href: `/matrix#${encodeURIComponent(channelAnchorId(s.channelId))}`,
+          linkLabel: "怎么发 →"
         }))
       : [];
   return [...todoItems, ...suggestionItems];
@@ -299,13 +315,80 @@ ${renderReferrersTable(d.referrers)}
 
 const LANG_LABELS: Record<string, string> = { zh: "中", en: "英" };
 
+// Four genuinely different pieces of work (src/channels.ts's ChannelKind), each
+// with its own intro so a reader who lands on a scored cell learns what the
+// action *is* before reading the per-channel specifics. Grouped and ordered
+// roughly fastest-payoff-first rather than alphabetically.
+const KIND_LABELS: Record<ChannelKind, string> = {
+  post: "发帖",
+  "list-pr": "提 PR 收录",
+  pitch: "自荐",
+  listing: "登记条目"
+};
+
+const KIND_ORDER: ChannelKind[] = ["post", "list-pr", "pitch", "listing"];
+
+const KIND_INTROS: Record<ChannelKind, string> = {
+  post: "自己开一个帖子。标题和首图决定成败，发完当天要守着回帖维持热度。见效最快，也最容易一次把机会用光。",
+  "list-pr": "不是发帖，是去别人的 awesome 仓库 fork、按既有格式加一行、提 PR。不会有流量尖峰，但会被搜索长期抓到。",
+  pitch: "向别人的栏目自荐，收不收由编辑决定。一次十分钟，命中率不高，适合长期反复投。",
+  listing: "在平台上建一个产品／作品页面长期挂着，靠平台自身的搜索和分类带人。一次性投入，长尾回报。"
+};
+
+// The channel's own header cell: the name is a real link out (the whole point —
+// a channel you can't reach is a channel you won't use), and `title` carries the
+// full how-to for hover. Hover alone isn't enough (it doesn't exist on touch),
+// hence the always-visible guide section below; this is the convenience path.
+function matrixHeadCell(c: MatrixChannel): string {
+  const kind = KIND_LABELS[c.kind] ?? c.kind;
+  const lang = LANG_LABELS[c.lang] ?? c.lang;
+  return (
+    `<th title="${esc(c.howTo)}">` +
+    `<a class="ch-name" href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>` +
+    `<span class="lang">${esc(kind)} · ${esc(lang)}</span></th>`
+  );
+}
+
+// The always-visible half of the how-to: every channel, grouped by what kind of
+// action it needs. Each <li> carries `id="ch-<channelId>"` so the overview's
+// suggestion rows (actionItems below) can deep-link straight to the instructions
+// for the exact channel they're recommending, instead of dropping the reader at
+// the top of a 26-column table.
+function howToGroup(kind: ChannelKind, channels: MatrixChannel[]): string {
+  const items = channels
+    .map(
+      c =>
+        `<li id="${esc(channelAnchorId(c.id))}">` +
+        `<a href="${esc(c.url)}" target="_blank" rel="noopener">${esc(c.name)}</a>` +
+        `<span class="lang-inline">${esc(LANG_LABELS[c.lang] ?? c.lang)}</span>` +
+        `<p>${esc(c.howTo)}</p></li>`
+    )
+    .join("");
+  return (
+    `<div class="howto-group"><h3>${esc(KIND_LABELS[kind] ?? kind)} · ${channels.length} 个渠道</h3>` +
+    `<p class="sub">${esc(KIND_INTROS[kind] ?? "")}</p><ul class="ch-list">${items}</ul></div>`
+  );
+}
+
+function howToSection(channels: MatrixChannel[]): string {
+  // Any kind with no channels renders nothing; an unknown kind (a channel added
+  // with a kind outside KIND_ORDER) would otherwise vanish silently, so the
+  // leftovers get their own trailing group rather than being dropped.
+  const known = KIND_ORDER.filter(k => channels.some(c => c.kind === k));
+  const unknown = [...new Set(channels.map(c => c.kind).filter(k => !KIND_ORDER.includes(k)))];
+  const groups = [...known, ...unknown]
+    .map(kind => howToGroup(kind, channels.filter(c => c.kind === kind)))
+    .join("");
+  return `<section class="howto"><h2>怎么发</h2>
+<p class="sub">同样是「该做」，四类渠道的操作完全不同——先认清你要做的是哪一类，再看具体那一条。</p>
+${groups}</section>`;
+}
+
 export function renderMatrix(m: MatrixData, authed: boolean): string {
   const covByKey = new Map(m.coverage.map(c => [`${c.project}:${c.channelId}`, c]));
   const sugByKey = new Map(m.suggestions.map(s => [`${s.project}:${s.channelId}`, s.score]));
 
-  const headCells = m.channels
-    .map(c => `<th>${esc(c.name)}<span class="lang">${esc(LANG_LABELS[c.lang] ?? c.lang)}</span></th>`)
-    .join("");
+  const headCells = m.channels.map(matrixHeadCell).join("");
 
   const rows = m.projects
     .map(projectName => {
@@ -323,10 +406,11 @@ export function renderMatrix(m: MatrixData, authed: boolean): string {
   const body = `${navHeader("matrix", authed)}
 <main>
 <h1>渠道覆盖矩阵</h1>
-<p class="lead">项目 × 渠道。数字气泡 = 未覆盖且适配的建议（值为标签适配分）。</p>
+<p class="lead">项目 × 渠道。数字气泡 = 未覆盖且适配的建议（值为标签适配分）。点渠道名去该渠道，下方「怎么发」给每个渠道的具体做法。</p>
 <div class="legend"><span class="posted">✓ 已发</span><span class="planned">◷ 计划中</span><span><span class="sug">3</span> 建议（适配分）</span><span class="na">— 不适配</span></div>
 <div class="scroll"><table class="matrix-table"><thead><tr><th></th>${headCells}</tr></thead><tbody>${rows}</tbody></table></div>
-<p class="hint">建议分 = 项目标签与渠道标签交集数；已覆盖／不适配的组合不再出现在总览的建议行动里。</p>
+<p class="hint">建议分 = 项目标签与渠道标签交集数，只衡量话题对不对口，<strong>不衡量成本和触达</strong>——分低但十分钟就能做完的渠道（比如周刊自荐），常常比分高的重头发布更值得先做。已覆盖／不适配的组合不再出现在总览的建议行动里。</p>
+${howToSection(m.channels)}
 </main>`;
   return page("beacon · 渠道矩阵", body);
 }

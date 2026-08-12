@@ -163,6 +163,11 @@ ul.audit li:last-child { border-bottom: 0; }
 .matrix-table th, .matrix-table td { text-align: center; white-space: nowrap; padding: 9px 10px; }
 .matrix-table thead th { font-size: 11px; color: var(--muted); font-weight: 600; }
 .matrix-table thead th .lang { display: block; font-weight: 400; }
+/* The channel name in the header is a link out to the channel itself. Dotted
+   underline rather than a full link color: it must not out-shout the coverage
+   marks in the cells below, which are what the table is actually about. */
+.matrix-table thead th a.ch-name { color: var(--ink-2); text-decoration: none; border-bottom: 1px dotted var(--border); }
+.matrix-table thead th a.ch-name:hover { color: var(--ink-1); }
 .matrix-table tbody th { text-align: left; font-weight: 600; position: sticky; left: 0; background: var(--surface-1); }
 .posted { color: var(--posted); font-weight: 700; }
 /* A posted cell's attached effect (design doc §5 / review item 2) — small and
@@ -178,6 +183,20 @@ li.done { color: var(--muted); } li.done .title { text-decoration: line-through;
 li.done .effect { margin-left: auto; font-size: 12px; color: var(--good-text); white-space: nowrap; }
 .sec-cap { font-size: 12px; color: var(--muted); font-weight: 600; margin: 14px 0 4px; }
 .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }
+/* 「怎么发」— the always-visible per-channel instructions under the matrix.
+   :target highlights the one <li> an overview suggestion deep-linked to, so the
+   jump lands somewhere visibly, not just somewhere. */
+section.howto { margin-top: 28px; }
+.howto-group { margin-top: 18px; }
+.howto-group h3 { font-size: 13px; margin: 0 0 3px; }
+ul.ch-list { list-style: none; margin: 8px 0 0; padding: 0; }
+ul.ch-list li { padding: 9px 8px; border-bottom: 1px solid var(--grid); border-radius: 5px; }
+ul.ch-list li:last-child { border-bottom: 0; }
+ul.ch-list li:target { background: var(--sug-bg); }
+ul.ch-list a { font-size: 13.5px; color: var(--ink-1); font-weight: 550; text-decoration: none; }
+ul.ch-list a:hover { text-decoration: underline; }
+.lang-inline { margin-left: 7px; font-size: 11px; color: var(--muted); }
+ul.ch-list p { margin: 4px 0 0; font-size: 12.5px; color: var(--ink-2); line-height: 1.6; }
 input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--series-1); flex: 0 0 auto; }
 /* A <form> wrapping controls that must lay out as if the form tag weren't
    there at all — e.g. a todo row's checkbox+button inside a flex <li>, or a
