@@ -17,7 +17,16 @@ export const CHANNELS: Channel[] = [
   { id: "r-macapps", name: "r/macapps", url: "https://www.reddit.com/r/macapps/", lang: "en", tags: ["macos", "en"] },
   { id: "r-sideproject", name: "r/SideProject", url: "https://www.reddit.com/r/SideProject/", lang: "en", tags: ["tool", "web", "game", "ai", "en"] },
   { id: "r-webgames", name: "r/WebGames", url: "https://www.reddit.com/r/WebGames/", lang: "en", tags: ["game", "web", "en"] },
-  { id: "awesome-selfhosted", name: "awesome-selfhosted", url: "https://github.com/awesome-selfhosted/awesome-selfhosted", lang: "en", tags: ["selfhosted", "en"] }
+  { id: "awesome-selfhosted", name: "awesome-selfhosted", url: "https://github.com/awesome-selfhosted/awesome-selfhosted", lang: "en", tags: ["selfhosted", "en"] },
+  { id: "ruanyf-weekly", name: "阮一峰科技爱好者周刊（issue 自荐）", url: "https://github.com/ruanyf/weekly", lang: "zh", tags: ["tool", "web", "macos", "ai", "selfhosted", "zh"] },
+  { id: "hellogithub", name: "HelloGitHub 月刊（自荐）", url: "https://github.com/521xueweihan/HelloGitHub", lang: "zh", tags: ["tool", "web", "ai", "selfhosted", "zh"] },
+  { id: "zhihu", name: "知乎", url: "https://www.zhihu.com", lang: "zh", tags: ["tool", "ai", "game", "zh"] },
+  { id: "xiaohongshu", name: "小红书", url: "https://www.xiaohongshu.com", lang: "zh", tags: ["tool", "ai", "zh"] },
+  { id: "wechat-mp", name: "微信公众号", url: "https://mp.weixin.qq.com", lang: "zh", tags: ["tool", "ai", "zh"] },
+  { id: "bilibili", name: "B 站（演示视频）", url: "https://www.bilibili.com", lang: "zh", tags: ["tool", "game", "ai", "zh"] },
+  { id: "awesome-tauri", name: "awesome-tauri（PR 收录）", url: "https://github.com/tauri-apps/awesome-tauri", lang: "en", tags: ["macos", "tool", "en"] },
+  { id: "awesome-mac", name: "awesome-mac（PR 收录）", url: "https://github.com/jaywcjlove/awesome-mac", lang: "en", tags: ["macos", "tool", "en"] },
+  { id: "alternativeto", name: "AlternativeTo（登记产品）", url: "https://alternativeto.net", lang: "en", tags: ["tool", "web", "selfhosted", "macos", "en"] }
 ];
 export function fitScore(project: ProjectConfig, channel: Channel): number {
   return channel.tags.filter(t => project.tags.includes(t)).length;
