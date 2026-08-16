@@ -685,3 +685,77 @@ describe("audit subrequest budget: formula vs. reality", () => {
     expect(calls).toBeLessThanOrEqual(SUBREQUEST_CAP);
   });
 });
+
+// False-positive classes 5 and 6, both found the day shiling was added to the
+// fleet. Every one of these mints a P1 todo pointing at a link that works.
+describe("link checking: two more false-positive classes", () => {
+  const project = CONFIG.projects.find(p => p.repo === SHOTSYNC_REPO)!;
+
+  it("stops a bare URL at full-width CJK punctuation instead of swallowing the prose after it", async () => {
+    // shiling's README, verbatim in shape: a link, bold markers, then a
+    // parenthetical in Chinese with no separating space.
+    const readme = "# 食灵\n\n▶ 在线试玩: https://shiling.pages.dev**（无需安装，存档在浏览器本地）\n";
+    const probed: string[] = [];
+    const stub: typeof fetch = async input => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json([]);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      probed.push(url);
+      return new Response("ok", { status: 200 });
+    };
+    const input = await collectAuditInput("tok", project, stub);
+    expect([...new Set(probed)]).toEqual(["https://shiling.pages.dev"]);
+    expect(input.brokenLinks).toEqual([]);
+  });
+
+  // NOTE: unlike its two siblings in this block, this one is not a revert-guard
+  // — it passes against the pre-fix ASCII-only stop set too, since narrowing a
+  // negated class can only ever exclude more, never fewer. It pins the design
+  // choice the adjacent comment in src/audit/run.ts records: a fixed punctuation
+  // list, NOT "any non-ASCII", which would have been the shorter fix and would
+  // have silently broken every internationalized domain.
+  it("keeps matching an internationalized domain (the CJK stop set is punctuation, not 'any non-ASCII')", async () => {
+    const readme = "# x\n\nDocs: https://例え.テスト/guide\n";
+    const probed: string[] = [];
+    const stub: typeof fetch = async input => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json([]);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      probed.push(url);
+      return new Response("ok", { status: 200 });
+    };
+    await collectAuditInput("tok", project, stub);
+    expect(probed.some(u => u.includes("例え.テスト"))).toBe(true);
+  });
+
+  it("never probes a *.workers.dev link, because a Worker cannot resolve one", async () => {
+    const readme = [
+      "# shotsync",
+      "Demo: https://shotsync-demo.defiabell.workers.dev",
+      "Docs: https://example.com/guide"
+    ].join("\n\n");
+    const probed: string[] = [];
+    const stub: typeof fetch = async input => {
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json([]);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      probed.push(url);
+      // Reproduces what Workers egress actually returns for these: 404 for
+      // every method. If the skip regressed, the link would be reported broken.
+      if (url.includes("workers.dev")) return new Response("", { status: 404 });
+      return new Response("ok", { status: 200 });
+    };
+    const input = await collectAuditInput("tok", project, stub);
+    expect(probed.some(u => u.includes("workers.dev"))).toBe(false);
+    expect(input.brokenLinks).toEqual([]);
+    // The non-workers.dev link on the same README is still checked — the skip
+    // is host-scoped, not a blanket bail-out.
+    expect(probed).toContain("https://example.com/guide");
+  });
+});

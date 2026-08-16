@@ -127,6 +127,39 @@ function isCheckableHost(url: string): boolean {
   }
 }
 
+// A *.workers.dev address cannot be checked from inside a Worker, so beacon
+// must not render a verdict on one. Measured 2026-08-17 with a throwaway Worker
+// deployed to the same account: GET https://shotsync-demo.defiabell.workers.dev
+// and GET https://screen-coach-trial.defiabell.workers.dev both answer 404 from
+// Workers egress, while the same GETs answer 200 from an ordinary client, and
+// control fetches to shiling.pages.dev and example.com answer 200 from both.
+// The audit had been reporting both of those live demos as broken README links.
+//
+// What was NOT established, and is not planned to be: whether this is specific
+// to the *same* account's workers.dev subdomain or applies to any of them. The
+// skip is deliberately broad either way — a missed check is recoverable, a false
+// "broken link" mints a P1 todo the owner then chases for nothing, which has now
+// happened five separate ways.
+//
+// Skipped silently, rather than reported as a third "unverifiable" outcome,
+// because CheckResult.status (../audit/checks.ts) is a closed pass/fail/na union
+// that the D1 schema and every rendering site agree on; widening it for a
+// handful of the owner's own demo links isn't worth the ripple. If this list
+// ever grows enough to need visibility, checkReadmeLinks's freeform `detail`
+// string is the cheap place to say "N links skipped as unverifiable".
+//
+// Exact-or-subdomain match, and an unparsable URL is NOT skipped — same shape as
+// isGithubHosted below, deliberately, so that "evil-workers.dev" and
+// "workers.dev.attacker.com" both stay checked.
+function isWorkersDevHosted(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === "workers.dev" || hostname.endsWith(".workers.dev");
+  } catch {
+    return false;
+  }
+}
+
 function isGithubHosted(url: string): boolean {
   try {
     const hostname = new URL(url).hostname;
@@ -165,8 +198,19 @@ function stripCode(markdown: string): string {
     .replace(/`[^`\n]*`/g, " ");
 }
 
+// Full-width CJK punctuation terminates a bare URL exactly the way whitespace
+// and ")" already did. These READMEs are Chinese, so a link is routinely
+// followed immediately by 「（」or「，」with no space — shiling's README carries
+// "https://shiling.pages.dev**（无需安装，存档在浏览器本地）", which the ASCII-only
+// stop set swallowed whole, producing the un-resolvable phantom URL
+// "https://shiling.pages.dev**（无需安装，存档在浏览器本地）" and a P1 todo for a
+// link that works. Deliberately a fixed punctuation list rather than "any
+// non-ASCII": an internationalized domain is a real URL and must keep matching.
+const CJK_URL_TERMINATORS = "（）【】〔〕「」『』〈〉《》，。、；：！？…—～·“”‘’\\u3000";
+const BARE_URL = new RegExp(`https?://[^\\s)"'<>${CJK_URL_TERMINATORS}]+`, "g");
+
 function extractReadmeLinks(readme: string): string[] {
-  const matches = (stripCode(readme).match(/https?:\/\/[^\s)"'<>]+/g) ?? [])
+  const matches = (stripCode(readme).match(BARE_URL) ?? [])
     .map(trimUrlTail)
     .filter(u => /^https?:\/\/[^/]+/.test(u));
   const seen = new Set<string>();
@@ -176,6 +220,7 @@ function extractReadmeLinks(readme: string): string[] {
     seen.add(url);
     if (!isCheckableHost(url)) continue;
     if (isGithubHosted(url)) continue;
+    if (isWorkersDevHosted(url)) continue;
     result.push(url);
     if (result.length >= MAX_LINKS_CHECKED) break;
   }
