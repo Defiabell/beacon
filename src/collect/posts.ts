@@ -8,21 +8,26 @@ function hostMatches(hostname: string, domain: string): boolean {
 }
 
 export function detectPlatform(url: string): Platform | null {
-  let hostname: string;
+  let parsed: URL;
   try {
-    hostname = new URL(url).hostname;
+    parsed = new URL(url);
   } catch {
     return null;
   }
+  const hostname = parsed.hostname;
   if (hostMatches(hostname, "v2ex.com")) return "v2ex";
   if (hostMatches(hostname, "linux.do")) return "linuxdo";
   if (hostMatches(hostname, "news.ycombinator.com")) return "hn";
   if (hostMatches(hostname, "reddit.com")) return "reddit";
+  // Exact host (not hostMatches): github.com subdomains are distinct products
+  // (gist/api/raw), unlike reddit's www./old. mirrors. Only issue/PR pages —
+  // repo/profile URLs have no comment metrics, so they stay unregistrable.
+  if ((hostname === "github.com" || hostname === "www.github.com") && GITHUB_ISSUE_PATH.test(parsed.pathname)) return "github";
   return null;
 }
 
-async function fetchJson<T>(url: string, fetchFn: FetchFn): Promise<T> {
-  const res = await fetchFn(url, { headers: { "User-Agent": USER_AGENT } });
+async function fetchJson<T>(url: string, fetchFn: FetchFn, extraHeaders?: Record<string, string>): Promise<T> {
+  const res = await fetchFn(url, { headers: { "User-Agent": USER_AGENT, ...extraHeaders } });
   if (!res.ok) throw new Error(`${url} -> ${res.status}`);
   return res.json();
 }
@@ -92,10 +97,33 @@ async function fetchRedditMetrics(url: string, fetchFn: FetchFn): Promise<PostMe
   return { views: null, replies: post.num_comments, likes: null, score: post.score };
 }
 
+// Matches /{owner}/{repo}/issues/{n} and /{owner}/{repo}/pull/{n} — the
+// /repos/{owner}/{repo}/issues/{n} REST endpoint serves both kinds.
+const GITHUB_ISSUE_PATH = /^\/([^/]+)\/([^/]+)\/(?:issues|pull)\/(\d+)/;
+
+interface GithubIssue {
+  comments: number;
+  reactions?: { total_count: number };
+}
+
+// Unauthenticated api.github.com allows only 60 req/h per IP — Workers share
+// egress IPs, so that quota is effectively always exhausted. Send the token.
+async function fetchGithubMetrics(url: string, fetchFn: FetchFn, token?: string): Promise<PostMetrics> {
+  const m = new URL(url).pathname.match(GITHUB_ISSUE_PATH);
+  if (!m) throw new Error(`not a github issue/pull url: ${url}`);
+  const issue = await fetchJson<GithubIssue>(
+    `https://api.github.com/repos/${m[1]}/${m[2]}/issues/${m[3]}`,
+    fetchFn,
+    token ? { Authorization: `Bearer ${token}` } : undefined
+  );
+  return { views: null, replies: issue.comments, likes: issue.reactions?.total_count ?? null, score: null };
+}
+
 export async function fetchPostMetrics(
   url: string,
   platform: Platform,
-  fetchFn: FetchFn = fetch
+  fetchFn: FetchFn = fetch,
+  githubToken?: string
 ): Promise<PostMetrics> {
   switch (platform) {
     case "v2ex":
@@ -106,6 +134,8 @@ export async function fetchPostMetrics(
       return fetchHnMetrics(url, fetchFn);
     case "reddit":
       return fetchRedditMetrics(url, fetchFn);
+    case "github":
+      return fetchGithubMetrics(url, fetchFn, githubToken);
     default:
       throw new Error(`unknown platform: ${platform}`);
   }

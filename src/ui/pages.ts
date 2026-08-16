@@ -18,7 +18,7 @@ type NavKey = "overview" | "matrix" | "todos" | "posts" | "impact" | null;
 
 const SOURCE_LABELS: Record<string, string> = { audit: "体检", matrix: "矩阵", manual: "手动" };
 const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", audit: "体检" };
-const PLATFORM_LABELS: Record<Platform, string> = { v2ex: "V2EX", linuxdo: "LinuxDO", hn: "HN", reddit: "Reddit" };
+const PLATFORM_LABELS: Record<Platform, string> = { v2ex: "V2EX", linuxdo: "LinuxDO", hn: "HN", reddit: "Reddit", github: "GitHub" };
 const CHECK_LABELS: Record<string, string> = {
   description: "description ≥ 20 字符",
   topics: "topics ≥ 3 个",

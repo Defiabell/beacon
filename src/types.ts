@@ -5,7 +5,7 @@ export interface Env {
   GOATCOUNTER_SITE?: string;   // GoatCounter site code，如 "defiabell"
   GOATCOUNTER_TOKEN?: string;
 }
-export type Platform = "v2ex" | "linuxdo" | "hn" | "reddit";
+export type Platform = "v2ex" | "linuxdo" | "hn" | "reddit" | "github";
 export interface RepoDaily { repo: string; date: string; views: number; uniqueViews: number; clones: number; uniqueClones: number; stars: number; forks: number; }
 export interface ReferrerRow { referrer: string; count: number; uniques: number; }
 export interface Post { id?: number; url: string; platform: Platform; project: string; title: string; publishedAt: string | null; }

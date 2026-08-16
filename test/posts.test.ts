@@ -167,3 +167,94 @@ describe("fetchPostMetrics: shared behavior", () => {
     ).rejects.toThrow(/unknown platform/);
   });
 });
+
+describe("github platform", () => {
+  it("detects a github issue url", () => {
+    expect(detectPlatform("https://github.com/ruanyf/weekly/issues/11227")).toBe("github");
+  });
+  it("detects a github pull request url", () => {
+    expect(detectPlatform("https://github.com/tauri-apps/awesome-tauri/pull/1234")).toBe("github");
+  });
+  it("returns null for non-issue github urls (repo home, gist)", () => {
+    expect(detectPlatform("https://github.com/Defiabell/shotsync")).toBeNull();
+    expect(detectPlatform("https://gist.github.com/Defiabell/abc")).toBeNull();
+  });
+
+  it("maps comments to replies and reactions.total_count to likes", async () => {
+    const stub: typeof fetch = async () =>
+      Response.json({ comments: 7, reactions: { total_count: 12 } });
+    const m = await fetchPostMetrics(
+      "https://github.com/ruanyf/weekly/issues/11227",
+      "github",
+      stub
+    );
+    expect(m.replies).toBe(7);
+    expect(m.likes).toBe(12);
+    expect(m.views).toBeNull();
+    expect(m.score).toBeNull();
+  });
+
+  it("requests the repos issues API derived from the page url", async () => {
+    let requested = "";
+    const stub: typeof fetch = async input => {
+      requested = String(input);
+      return Response.json({ comments: 0 });
+    };
+    await fetchPostMetrics("https://github.com/ruanyf/weekly/issues/11227", "github", stub);
+    expect(requested).toBe("https://api.github.com/repos/ruanyf/weekly/issues/11227");
+  });
+
+  it("nulls likes when the reactions block is absent", async () => {
+    const stub: typeof fetch = async () => Response.json({ comments: 3 });
+    const m = await fetchPostMetrics(
+      "https://github.com/ruanyf/weekly/issues/11227",
+      "github",
+      stub
+    );
+    expect(m.likes).toBeNull();
+  });
+
+  it("throws for a github url without an issue/pull path", async () => {
+    const stub: typeof fetch = async () => Response.json({ comments: 0 });
+    await expect(
+      fetchPostMetrics("https://github.com/Defiabell/shotsync", "github", stub)
+    ).rejects.toThrow(/not a github issue/);
+  });
+});
+
+describe("github metrics auth", () => {
+  it("sends Authorization when a token is provided", async () => {
+    let captured: HeadersInit | undefined;
+    const stub: typeof fetch = async (_input, init) => {
+      captured = init?.headers;
+      return Response.json({ comments: 0 });
+    };
+    await fetchPostMetrics(
+      "https://github.com/ruanyf/weekly/issues/11227",
+      "github",
+      stub,
+      "tok-123"
+    );
+    expect(new Headers(captured).get("Authorization")).toBe("Bearer tok-123");
+  });
+
+  it("omits Authorization when no token is provided", async () => {
+    let captured: HeadersInit | undefined;
+    const stub: typeof fetch = async (_input, init) => {
+      captured = init?.headers;
+      return Response.json({ comments: 0 });
+    };
+    await fetchPostMetrics("https://github.com/ruanyf/weekly/issues/11227", "github", stub);
+    expect(new Headers(captured).get("Authorization")).toBeNull();
+  });
+});
+
+describe("github host exactness", () => {
+  it("rejects github subdomains even with an issue-shaped path", () => {
+    expect(detectPlatform("https://api.github.com/repos/ruanyf/issues/1")).toBeNull();
+    expect(detectPlatform("https://gist.github.com/foo/bar/issues/1")).toBeNull();
+  });
+  it("accepts www.github.com", () => {
+    expect(detectPlatform("https://www.github.com/ruanyf/weekly/issues/11227")).toBe("github");
+  });
+});

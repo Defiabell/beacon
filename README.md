@@ -10,7 +10,7 @@ A growth engine for your side projects — self-hosted on Cloudflare's free tier
 
 beacon is a single **Cloudflare Worker + D1 database**, organized around three layers:
 
-- **Measure** — a daily cron (`0 1 * * *` UTC, see `wrangler.toml`) pulls each tracked repo's GitHub traffic/clones/star history (`src/collect/github.ts`), refreshes metrics for every post you've registered on V2EX/LinuxDO/Hacker News/Reddit (`src/collect/posts.ts`), and — optionally — daily pageviews from a GoatCounter site (`src/collect/goatcounter.ts`).
+- **Measure** — a daily cron (`0 1 * * *` UTC, see `wrangler.toml`) pulls each tracked repo's GitHub traffic/clones/star history (`src/collect/github.ts`), refreshes metrics for every post you've registered on V2EX/LinuxDO/Hacker News/Reddit/GitHub issues & PRs (`src/collect/posts.ts`), and — optionally — daily pageviews from a GoatCounter site (`src/collect/goatcounter.ts`).
 - **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 9 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced), and a channel-coverage matrix (`src/channels.ts`) scores each project against 17 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
 - **Act** — every failed audit check and every high-scoring unposted channel becomes a row in `todos`, surfaced on the dashboard and via `/api/todos` — a concrete next action instead of just a report.
 

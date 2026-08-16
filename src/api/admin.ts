@@ -109,7 +109,7 @@ export async function createPost(env: Env, input: CreatePostInput, fetchFn: Fetc
   // and will backfill today's metrics on its next run, same as for any other post.
   const today = new Date().toISOString().slice(0, 10);
   try {
-    const metrics = await fetchPostMetrics(input.url, platform, fetchFn);
+    const metrics = await fetchPostMetrics(input.url, platform, fetchFn, env.GITHUB_TOKEN);
     await upsertPostMetrics(env.DB, id, today, metrics);
     return { ok: true, id, metricsDeferred: false };
   } catch {

@@ -73,7 +73,7 @@ async function collectPosts(env: Env, date: string, fetchFn: FetchFn): Promise<S
   const failures: string[] = [];
   for (const post of posts) {
     try {
-      const metrics = await fetchPostMetrics(post.url, post.platform, fetchFn);
+      const metrics = await fetchPostMetrics(post.url, post.platform, fetchFn, env.GITHUB_TOKEN);
       await upsertPostMetrics(env.DB, post.id!, date, metrics);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
