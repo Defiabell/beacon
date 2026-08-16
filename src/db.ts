@@ -217,6 +217,32 @@ export async function insertTodoIfNew(db: D1Database, t: Todo): Promise<void> {
     .run();
 }
 
+// The mirror of closeTodoByTitle: reopens (status='done' -> 'open',
+// done_at=NULL) a todo whose underlying check has started failing again.
+//
+// insertTodoIfNew alone cannot express this. Its INSERT OR IGNORE collides with
+// the todos_unique index on (project, source, title) and silently does nothing
+// when a row with that title already exists — including a *closed* one — so a
+// check that regressed after its todo was marked done produced no todo at all,
+// and the dashboard under-reported the real work. Observed in production:
+// shotsync's readme-links check went back to failing on 2026-08-16 while
+// /api/todos still listed exactly one open item.
+//
+// This does override a manual "done" tick on an audit-sourced todo, and that is
+// the intended contract: an audit todo is derived state, and the check — not the
+// checkbox — decides whether the work is finished.
+export async function reopenTodoByTitle(
+  db: D1Database,
+  project: string,
+  source: Todo["source"],
+  title: string
+): Promise<void> {
+  await db
+    .prepare(`UPDATE todos SET status='open', done_at=NULL WHERE status='done' AND project=?1 AND source=?2 AND title=?3`)
+    .bind(project, source, title)
+    .run();
+}
+
 // Closes (status='open' -> 'done', done_at=doneAt) any open todo matching this
 // exact (project, source, title) — a no-op UPDATE (0 rows affected) when no
 // such open todo exists, so callers can call it unconditionally rather than

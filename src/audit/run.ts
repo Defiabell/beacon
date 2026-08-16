@@ -3,19 +3,52 @@ import type { ProjectConfig } from "../config";
 import type { FetchFn } from "../collect/github";
 import { ghHeaders } from "../collect/github";
 import { CONFIG } from "../config";
-import { upsertAuditResults, insertTodoIfNew, closeTodoByTitle } from "../db";
+import { upsertAuditResults, insertTodoIfNew, reopenTodoByTitle, closeTodoByTitle } from "../db";
 import type { RepoAuditInput } from "./checks";
 import { runRepoChecks, todoTitle } from "./checks";
 
 const USER_AGENT = "beacon (+https://github.com/Defiabell/beacon)";
-// Per-repo external-link check budget. Chosen so a full audit run of 4 repos
-// worst-cases at 4 base fetches + 3 links x2 (HEAD, then a GET fallback on
-// 403/405) per repo = 4x(4+3x2) = 40 subrequests — comfortably under the
-// Workers free tier's 50-subrequests-per-invocation cap. See wrangler.toml /
-// src/collect/run.ts for how the daily cron is split across two invocations
-// so this budget doesn't also have to share headroom with github/posts/
-// goatcounter in the same invocation.
+
+// A HEAD answered with one of these means "this server won't tell me about the
+// resource this way", not "the resource is gone" — retry with GET before
+// concluding anything. See isLinkBroken.
+const HEAD_UNSUPPORTED_STATUSES = new Set([403, 404, 405, 410]);
+
+// Per-repo external-link check budget. See auditWorstCaseSubrequests below for
+// the arithmetic this has to satisfy — the test suite asserts the current
+// CONFIG.projects fleet stays under the cap, so growing the fleet fails a test
+// locally instead of silently blowing the audit's subrequest budget in
+// production. See wrangler.toml / src/collect/run.ts for how the daily cron is
+// split across two invocations so this budget doesn't also have to share
+// headroom with github/posts/goatcounter in the same invocation.
 const MAX_LINKS_CHECKED = 3;
+
+// Base (non-link) fetches per repo: repo meta, README, og:image — plus the
+// releases call, which collectAuditInput skips for a project that isn't macos-
+// tagged (checkReleaseAssets in ../audit/checks.ts returns "na" without ever
+// reading releaseAssetCount there, so fetching it was pure waste).
+const AUDIT_BASE_FETCHES = 3;
+
+// The Workers free tier caps an invocation at 50 subrequests (Cloudflare's
+// documented limit). Overrunning it fails the offending fetch rather than
+// returning a partial result, and runSource (src/collect/run.ts) turns that
+// into the whole audit source recording ok:false — a failure nobody sees until
+// they look at /api/health. The exact overrun semantics are not something this
+// project has observed in production; the ceiling is asserted precisely so it
+// stays that way.
+export const SUBREQUEST_CAP = 50;
+
+// Worst case for one audit invocation over `projects`: every repo pays its base
+// fetches, plus every checked link costs 2 (HEAD, then the GET fallback). When
+// this outgrows SUBREQUEST_CAP the fix is to shard the audit across more cron
+// invocations (wrangler.toml), not to keep shaving MAX_LINKS_CHECKED — see
+// https://github.com/Defiabell/beacon/issues/12.
+export function auditWorstCaseSubrequests(projects: ProjectConfig[]): number {
+  return projects.reduce(
+    (sum, p) => sum + AUDIT_BASE_FETCHES + (p.tags.includes("macos") ? 1 : 0) + MAX_LINKS_CHECKED * 2,
+    0
+  );
+}
 const SOCIAL_PREVIEW_URL = (repo: string) => `https://github.com/${repo}`;
 
 interface RepoMeta {
@@ -155,7 +188,16 @@ function extractReadmeLinks(readme: string): string[] {
 async function isLinkBroken(url: string, fetchFn: FetchFn): Promise<boolean> {
   try {
     let res = await fetchFn(url, { method: "HEAD" });
-    if (res.status === 405 || res.status === 403) {
+    // 404 and 410 are in this fallback list, not just 403/405, because plenty
+    // of hand-rolled routers answer an unhandled HEAD with a plain 404 instead
+    // of 405 — beacon's own router does exactly that (src/index.ts's routePage
+    // returns null for a non-GET, which falls through to notFound()), and so
+    // does shotsync's demo Worker, which this audit consequently reported as a
+    // broken README link for days while the URL answered 200 to a GET. Treating
+    // a HEAD 404 as final made "server doesn't implement HEAD" indistinguishable
+    // from "page is gone". The worst case is unchanged at 2 fetches per link:
+    // the statuses were already a fallback trigger, this only widens which ones.
+    if (HEAD_UNSUPPORTED_STATUSES.has(res.status)) {
       res = await fetchFn(url, { method: "GET" });
     }
     // Only "this address leads nowhere" counts. A README that cites an API root
@@ -180,10 +222,17 @@ export async function collectAuditInput(
   project: ProjectConfig,
   fetchFn: FetchFn = fetch
 ): Promise<RepoAuditInput> {
+  // The releases call is skipped entirely for a non-macos project:
+  // checkReleaseAssets (../audit/checks.ts) short-circuits to "na" on the same
+  // condition without reading releaseAssetCount, so fetching it bought nothing
+  // and spent one of the invocation's 50 subrequests. 0 is the value that check
+  // never looks at — deliberately not a null/undefined sentinel, which would
+  // only invite a "no releases data" branch that has no meaning here.
+  const needsReleases = project.tags.includes("macos");
   const [meta, readme, releaseAssetCount, ogImageUrl] = await Promise.all([
     fetchRepoMeta(token, project.repo, fetchFn),
     fetchReadme(token, project.repo, fetchFn),
-    fetchReleaseAssetCount(token, project.repo, fetchFn),
+    needsReleases ? fetchReleaseAssetCount(token, project.repo, fetchFn) : Promise.resolve(0),
     fetchOgImage(project.repo, fetchFn)
   ]);
   const brokenLinks = await findBrokenLinks(readme, fetchFn);
@@ -222,6 +271,12 @@ export async function runAudit(env: Env, fetchFn: FetchFn = fetch): Promise<void
             priority: result.priority,
             status: "open"
           });
+          // insertTodoIfNew is a no-op when a row with this title already
+          // exists — including one that was closed on an earlier run — so a
+          // regressed check needs this second call to bring the todo back.
+          // Together the pair is "make sure an open todo exists for this
+          // failing check", which is the actual invariant.
+          await reopenTodoByTitle(env.DB, project.name, "audit", title);
         } else if (result.status === "pass") {
           // The check that generated this todo (if any) now passes — close it.
           // Safe to call unconditionally: it's a no-op UPDATE when no open todo

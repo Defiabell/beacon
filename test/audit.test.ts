@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
 import { runRepoChecks, todoTitle, type RepoAuditInput } from "../src/audit/checks";
-import { collectAuditInput, runAudit } from "../src/audit/run";
+import { collectAuditInput, runAudit, auditWorstCaseSubrequests, SUBREQUEST_CAP } from "../src/audit/run";
 import * as db from "../src/db";
 import { CONFIG } from "../src/config";
 import repoMeta from "./fixtures/gh-repo.json";
@@ -226,10 +226,20 @@ describe("collectAuditInput", () => {
     expect(input.tags).toEqual(project.tags);
     expect(input.meta.topics).toEqual(["clipboard"]);
     expect(input.readme).toContain("shotsync");
-    expect(input.releaseAssetCount).toBe(2);
+    // 0, not the fixture's 2: shotsync isn't macos-tagged, so its
+    // release-assets check is n/a and collectAuditInput skips the releases
+    // fetch entirely to save a subrequest. The macos half of that branch is
+    // asserted in "audit subrequest budget" below.
+    expect(input.releaseAssetCount).toBe(0);
     expect(input.ogImageUrl).toContain("opengraph.githubassets.com");
     expect(input.brokenLinks).toEqual(["https://example.com/broken-page"]);
     expect(input.brokenLinks.some(u => u.includes("github.com"))).toBe(false);
+  });
+
+  it("carries the real release asset count through for a macos project", async () => {
+    const mac = CONFIG.projects.find(p => p.tags.includes("macos"))!;
+    const input = await collectAuditInput("tok", mac, buildStub());
+    expect(input.releaseAssetCount).toBe(2);
   });
 
   it("does not treat trailing markdown emphasis as part of a bare URL", async () => {
@@ -314,7 +324,11 @@ describe("collectAuditInput", () => {
       return new Response("", { status: 404 });
     };
     const input = await collectAuditInput("tok", project, stub);
-    expect(probed).toEqual(["https://example.com/guide"]);
+    // Deduped: this asserts *which* URLs get probed, and a single link can now
+    // legitimately be probed twice (HEAD, then the GET fallback when HEAD 404s
+    // — see the HEAD-unsupported tests below). The claim under test is that the
+    // two in-code URLs are never probed at all.
+    expect([...new Set(probed)]).toEqual(["https://example.com/guide"]);
     expect(input.brokenLinks).toEqual(["https://example.com/guide"]);
   });
 
@@ -524,5 +538,150 @@ describe("runAudit", () => {
         .first<{ n: number }>();
       expect(count!.n).toBeGreaterThan(0);
     }
+  });
+});
+
+// Production false positive observed 2026-08-16: shotsync's README links to
+// https://shotsync-demo.defiabell.workers.dev, which answers HEAD with 404 and
+// GET with 200 (a hand-rolled Worker router that only handles GET — beacon's
+// own router has the same shape). The audit reported it as a broken link, which
+// is the fourth distinct false-positive class this check has produced, and every
+// one of them turns into a P1 todo the owner then chases for nothing.
+describe("link checking: servers that don't implement HEAD", () => {
+  const project = CONFIG.projects.find(p => p.repo === SHOTSYNC_REPO)!;
+
+  it("does not call a link broken when HEAD 404s but GET succeeds", async () => {
+    const base = buildStub();
+    let headAttempted = false;
+    const headHostile: typeof fetch = async (input, init) => {
+      if (String(input) === "https://example.com/docs") {
+        if ((init?.method ?? "GET") === "HEAD") {
+          headAttempted = true;
+          return new Response(null, { status: 404 });
+        }
+        return new Response("ok", { status: 200 });
+      }
+      return base(input, init);
+    };
+    const input = await collectAuditInput("tok", project, headHostile);
+    // Both halves matter: that HEAD was tried at all (we didn't quietly switch
+    // the whole check to GET and double every link's cost), and that its 404
+    // didn't decide the outcome.
+    expect(headAttempted).toBe(true);
+    expect(input.brokenLinks).not.toContain("https://example.com/docs");
+  });
+
+  it("still calls a link broken when the GET fallback 404s too", async () => {
+    // buildStub answers https://example.com/broken-page with 404 for every
+    // method, so the fallback confirms rather than rescues it.
+    const input = await collectAuditInput("tok", project, buildStub());
+    expect(input.brokenLinks).toContain("https://example.com/broken-page");
+  });
+});
+
+describe("audit subrequest budget", () => {
+  it("skips the releases fetch for a non-macos project, and keeps it for a macos one", async () => {
+    const seen: string[] = [];
+    const spy =
+      (base: typeof fetch): typeof fetch =>
+      async (input, init) => {
+        seen.push(String(input));
+        return base(input, init);
+      };
+
+    const nonMac = CONFIG.projects.find(p => !p.tags.includes("macos"))!;
+    await collectAuditInput("tok", nonMac, spy(buildStub()));
+    expect(seen.some(u => u.includes("/releases"))).toBe(false);
+
+    seen.length = 0;
+    const mac = CONFIG.projects.find(p => p.tags.includes("macos"))!;
+    await collectAuditInput("tok", mac, spy(buildStub()));
+    expect(seen.some(u => u.includes("/releases"))).toBe(true);
+  });
+
+  // The cap is enforced by the runtime, and blowing it surfaces only as the
+  // audit source recording ok:false in production — days later, if anyone
+  // looks. This test is what makes adding the fleet's next project fail here
+  // instead of there.
+  it("the configured fleet's worst-case audit run stays under the free-tier cap", () => {
+    const worst = auditWorstCaseSubrequests(CONFIG.projects);
+    expect(
+      worst,
+      `worst case is ${worst} subrequests for ${CONFIG.projects.length} projects, cap is ${SUBREQUEST_CAP}. ` +
+        `Shard the audit across more cron invocations (wrangler.toml) rather than shrinking MAX_LINKS_CHECKED.`
+    ).toBeLessThanOrEqual(SUBREQUEST_CAP);
+  });
+});
+
+describe("runAudit todo lifecycle: regression", () => {
+  // The close half of this was already covered; the reopen half was not, and
+  // its absence was live in production — shotsync's readme-links check went
+  // back to failing while /api/todos still listed exactly one open item,
+  // because insertTodoIfNew's INSERT OR IGNORE collides with the closed row's
+  // unique index and silently does nothing.
+  it("reopens the same todo row when a previously-fixed check fails again", async () => {
+    const brokenStub = buildStub();
+    const fixedStub: typeof fetch = async (input, init) => {
+      if (String(input) === "https://example.com/broken-page") return new Response("ok", { status: 200 });
+      return brokenStub(input, init);
+    };
+    const linkTodos = async () =>
+      (await db.listTodos(env.DB)).filter(t => t.project === "shotsync" && t.title.includes("断链"));
+
+    await runAudit(env, brokenStub);
+    await runAudit(env, fixedStub);
+    const closed = await linkTodos();
+    expect(closed).toHaveLength(1);
+    expect(closed[0].status).toBe("done");
+
+    await runAudit(env, brokenStub);
+    const reopened = await linkTodos();
+    // Same row brought back, not a second one alongside the closed original.
+    expect(reopened).toHaveLength(1);
+    expect(reopened[0].id).toBe(closed[0].id);
+    expect(reopened[0].status).toBe("open");
+    expect(reopened[0].doneAt).toBeNull();
+  });
+});
+
+// The guard above asserts the FORMULA's output against the cap. That is only
+// worth anything if the formula still describes what the code actually does —
+// a future fetch added anywhere in collectAuditInput/isLinkBroken would leave
+// the formula (and therefore that test) quietly optimistic while production
+// starts exceeding the cap. So this counts real calls through a spy and pins
+// them to the formula, making drift a test failure rather than an outage.
+describe("audit subrequest budget: formula vs. reality", () => {
+  it("a genuine worst-case run makes exactly auditWorstCaseSubrequests(CONFIG.projects) fetches", async () => {
+    // Worst case per repo = every base fetch, plus MAX_LINKS_CHECKED links that
+    // each cost two calls. A link costs two only when HEAD returns one of the
+    // HEAD_UNSUPPORTED_STATUSES and the GET fallback then runs, so these three
+    // answer 404 to everything: HEAD 404 -> GET 404 -> genuinely broken.
+    const readme = [
+      "# worst case",
+      "- https://worst-case-1.example.com/a",
+      "- https://worst-case-2.example.com/b",
+      "- https://worst-case-3.example.com/c"
+    ].join("\n\n");
+
+    let calls = 0;
+    const counting: typeof fetch = async input => {
+      calls++;
+      const url = String(input);
+      if (/\/readme$/.test(url)) return new Response(readme, { status: 200 });
+      if (/releases\?per_page=10$/.test(url)) return Response.json(releases);
+      if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
+      if (/^https:\/\/github\.com\//.test(url)) {
+        return new Response('<meta property="og:image" content="https://opengraph.githubassets.com/1/x">', { status: 200 });
+      }
+      return new Response("gone", { status: 404 });
+    };
+
+    await runAudit(env, counting);
+
+    // Equality, not <=: an over-estimate would silently waste headroom the
+    // moment the fleet grows, and an under-estimate is the dangerous one. Both
+    // are drift, and both should show up here.
+    expect(calls).toBe(auditWorstCaseSubrequests(CONFIG.projects));
+    expect(calls).toBeLessThanOrEqual(SUBREQUEST_CAP);
   });
 });
