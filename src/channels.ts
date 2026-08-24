@@ -267,6 +267,51 @@ export const CHANNELS: Channel[] = [
     kind: "listing",
     howTo:
       "登记一个产品页，填 logo、截图和描述。最关键的字段是「它是谁的替代品」——这个平台整个产品形态就是围绕替代关系组织的，这一栏填不准，条目基本不会被翻到。"
+  },
+  {
+    id: "githubdaily",
+    name: "GitHubDaily（issue 自荐）",
+    url: "https://github.com/GitHubDaily/GitHubDaily/issues",
+    lang: "zh",
+    tags: ["tool", "ai", "web", "macos", "zh"],
+    kind: "pitch",
+    howTo: "在仓库开 issue 推荐或自荐（README 明确欢迎）。编辑选中后发微博 + 公众号双端，中文圈转化天花板与阮一峰周刊同级。写清一句话卖点和仓库链接即可，别写长文。"
+  },
+  {
+    id: "tw93-weekly",
+    name: "潮流周刊（discussion 推荐）",
+    url: "https://github.com/tw93/weekly/discussions/22",
+    lang: "zh",
+    tags: ["tool", "macos", "web", "ai", "zh"],
+    kind: "pitch",
+    howTo: "在 tw93/weekly 的 discussions/22 楼层里回帖推荐（不是开 issue）。周刊偏好设计感好、能直接玩的工具，附一句为什么好用 + 链接。"
+  },
+  {
+    id: "oschina",
+    name: "OSCHINA 软件收录",
+    url: "https://www.oschina.net/project",
+    lang: "zh",
+    tags: ["tool", "web", "selfhosted", "zh"],
+    kind: "listing",
+    howTo: "注册后在软件频道提交开源项目收录，生成常驻项目主页（长尾 SEO）。入口和审核细节未实测，首次提交时留意表单要求。"
+  },
+  {
+    id: "console-dev",
+    name: "Console.dev（邮件投稿）",
+    url: "https://console.dev/selection-criteria/",
+    lang: "en",
+    tags: ["tool", "selfhosted", "en"],
+    kind: "pitch",
+    howTo: "英文 devtools 周刊，编辑双人评审制。无提交表单，邮件 hello@console.dev 简短自荐；先读 selection-criteria 页，强调 free/open-source 与 5 分钟可上手。"
+  },
+  {
+    id: "selfhst",
+    name: "selfh.st 周刊（入口待验证）",
+    url: "https://selfh.st",
+    lang: "en",
+    tags: ["selfhosted", "en"],
+    kind: "pitch",
+    howTo: "This Week in Self-Hosted 每周收录新发布的 self-hosted 软件。站点对爬虫 403，提交入口需人工打开确认（通常在 content/about 页）；它也扫 r/selfhosted 的 Megathread——在那里发过评论本身就有被动收录机会。"
   }
 ];
 
