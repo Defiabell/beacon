@@ -247,7 +247,7 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["macos", "tool", "en"],
     kind: "list-pr",
-    howTo: "fork tauri-apps/awesome-tauri，在对应分类下按格式加一行，提 PR。需要仓库有截图和可下载的 Release 产物。"
+    howTo: "⚠️ 2026-08 实测：已不收录应用（Apps 区被移除，PR 模板加了 no-application rule），只收 Guides/Templates/Plugins/Integrations。Tauri 应用的收录改走 awesome-mac。"
   },
   {
     id: "awesome-mac",
