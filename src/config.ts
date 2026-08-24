@@ -5,8 +5,8 @@ export const CONFIG: BeaconConfig = {
   dashboardTitle: "Defiabell / beacon",
   projects: [
     { name: "nightide", repo: "Defiabell/nightide", tags: ["game", "web", "zh", "en"], homepage: "https://defiabell.github.io/nightide/" },
-    { name: "day-monitor", repo: "Defiabell/day-monitor", tags: ["macos", "tool", "ai", "en"] },
-    { name: "shotsync", repo: "Defiabell/shotsync", tags: ["selfhosted", "tool", "web", "en"] },
+    { name: "day-monitor", repo: "Defiabell/day-monitor", tags: ["macos", "tool", "ai", "en"], homepage: "https://defiabell.github.io/day-monitor/" },
+    { name: "shotsync", repo: "Defiabell/shotsync", tags: ["selfhosted", "tool", "web", "en"], homepage: "https://shotsync-demo.defiabell.workers.dev" },
     { name: "screen-coach", repo: "Defiabell/screen-coach", tags: ["macos", "tool", "ai", "zh"] },
     { name: "shiling", repo: "Defiabell/shiling", tags: ["game", "web", "zh"], homepage: "https://shiling.pages.dev" }
   ]
