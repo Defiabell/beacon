@@ -36,13 +36,13 @@ export const CHANNELS: Channel[] = [
   },
   {
     id: "linuxdo",
-    name: "LinuxDO",
+    name: "LinuxDO（已降级：长线养号）",
     url: "https://linux.do",
     lang: "zh",
-    tags: ["tool", "web", "game", "macos", "ai", "selfhosted", "zh"],
+    tags: ["zh"],
     kind: "post",
     howTo:
-      "发帖时按内容选一个技术或资源类分类。社区吃技术细节——讲清怎么实现的比讲有什么功能更受欢迎。注意 beacon 抓不到 LinuxDO 的帖子数字（出口 IP 被挡），效果只能从 GitHub 流量侧面看。"
+      "⚠️ 2026-08 实测转化极低（开源推广帖 2 uniques，对照阮一峰周刊 223）：新号权重低 + 推广帖审核延迟会完全错过 Discourse 的时间线窗口，且社区主流注意力在 AI 资源/羊毛而非开源自荐。定位改为长线：日常养号、在相关讨论里自然提及项目，不再专门发推广帖。若仍要发：#开源推广 申明模板 + README 友链 + AI 文案必须截图发出；beacon 抓不到它的帖子指标（出口 IP 被挡）。"
   },
   {
     id: "sspai",
