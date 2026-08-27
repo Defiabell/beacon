@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { esc, svgSparkline, page } from "../src/ui/layout";
 import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderLogin, renderImpact } from "../src/ui/pages";
-import type { Overview, ProjectDetail, MatrixData, PostWithMetrics, ProjectSummary } from "../src/api/public";
+import type { Overview, ProjectDetail, MatrixData, MatrixCoverageRow, PostWithMetrics, ProjectSummary } from "../src/api/public";
 import type { Todo } from "../src/types";
 import type { EventImpact } from "../src/impact/attribute";
 import { CONFIG } from "../src/config";
@@ -304,6 +304,72 @@ describe("renderProject", () => {
       expect(() => renderProject("nightide", withOutOfRangeEvent, false)).not.toThrow();
       expect(renderProject("nightide", withOutOfRangeEvent, false)).not.toContain('class="marker"');
     });
+  });
+});
+
+describe("renderMatrix referral line", () => {
+  const base: MatrixData = {
+    projects: ["shotsync"],
+    channels: [
+      { id: "ruanyf-weekly", name: "阮一峰周刊", lang: "zh", url: "https://github.com/ruanyf/weekly", kind: "pitch", howTo: "投当期 issue。" },
+      { id: "githubdaily", name: "GitHubDaily", lang: "zh", url: "https://github.com/GitHubDaily/GitHubDaily/issues", kind: "pitch", howTo: "开 issue 自荐。" },
+      { id: "appinn", name: "小众软件", lang: "zh", url: "https://www.appinn.com", kind: "pitch", howTo: "发现频道自助提交。" }
+    ],
+    coverage: [],
+    suggestions: []
+  };
+
+  const render = (coverage: MatrixCoverageRow[]) => renderMatrix({ ...base, coverage }, false);
+
+  it("shows the referred figure for a channel that actually sent traffic", () => {
+    const html = render([
+      {
+        project: "shotsync",
+        channelId: "ruanyf-weekly",
+        status: "posted",
+        referred: { views: 506, uniques: 298, firstSeen: "2026-08-23", lastSeen: "2026-08-27", sharedHost: false }
+      }
+    ]);
+    expect(html).toContain("引流 506/298");
+  });
+
+  it("distinguishes 'observable but referred nobody' from 'not observable at all'", () => {
+    const html = render([
+      { project: "shotsync", channelId: "appinn", status: "posted", referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false } },
+      // githubdaily declares no referrer hosts -> `referred` absent entirely.
+      { project: "shotsync", channelId: "githubdaily", status: "posted" }
+    ]);
+    expect(html).toContain("引流 0");
+    expect(html).toContain("referrer 不可测");
+  });
+
+  it("flags a window-based effect that contradicts a zero referral as another channel's traffic", () => {
+    // The exact shape of the real defect: GitHubDaily's submission was never
+    // picked up (zero referred), yet the ±7-day window credited it with the
+    // 阮一峰周刊 spike sitting next to it.
+    const html = render([
+      {
+        project: "shotsync",
+        channelId: "appinn",
+        status: "posted",
+        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false },
+        effect: { views: 128, humanClones: 9, starsDelta: 14, status: "collecting", days: 3 }
+      }
+    ]);
+    expect(html).toContain("疑为他渠道流量");
+  });
+
+  it("does not flag a window effect that agrees with a real referral", () => {
+    const html = render([
+      {
+        project: "shotsync",
+        channelId: "ruanyf-weekly",
+        status: "posted",
+        referred: { views: 506, uniques: 298, firstSeen: "2026-08-23", lastSeen: "2026-08-27", sharedHost: false },
+        effect: { views: 719, humanClones: 27, starsDelta: 50, status: "complete", days: 7 }
+      }
+    ]);
+    expect(html).not.toContain("疑为他渠道流量");
   });
 });
 

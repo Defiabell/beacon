@@ -64,6 +64,42 @@ export async function getLatestReferrers(db: D1Database, repo: string): Promise<
   return res.results;
 }
 
+export interface PeakReferrer {
+  referrer: string;
+  views: number;
+  uniques: number;
+  firstSeen: string;
+  lastSeen: string;
+}
+
+// Per-referrer peak across every snapshot this repo has, which is the closest
+// thing to a lifetime total that GitHub's traffic API allows.
+//
+// The API reports a 14-day ROLLING total per referrer, so one snapshot is not
+// "traffic on that day" and consecutive snapshots are NOT additive (summing
+// them would multiply a single burst by ~14). What a publication actually looks
+// like in this data is a climb to the burst's full size followed by a decay as
+// the window slides past it — so MAX is the burst total. It underestimates only
+// a channel that keeps sending traffic for longer than 14 days, and in that
+// case it reports the best 14-day stretch, which is still a floor rather than a
+// wrong number.
+//
+// MAX(count) and MAX(uniques) can in principle come from different snapshot
+// dates; they move together in practice, and taking each separately keeps both
+// as floors, which is the direction we want to be wrong in.
+export async function getPeakReferrers(db: D1Database, repo: string): Promise<PeakReferrer[]> {
+  const res = await db
+    .prepare(
+      `SELECT referrer, MAX(count) AS views, MAX(uniques) AS uniques,
+              MIN(captured_date) AS firstSeen, MAX(captured_date) AS lastSeen
+       FROM referrer_snapshot WHERE repo=?1
+       GROUP BY referrer ORDER BY views DESC`
+    )
+    .bind(repo)
+    .all<PeakReferrer>();
+  return res.results;
+}
+
 // created_at is generated here (new Date().toISOString()), not taken from
 // `post` — it's not part of the Post param contract (see src/types.ts), so
 // every existing caller (src/api/admin.ts's createPost, tests) is unaffected.

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { CHANNELS, fitScore, suggestPairs } from "../src/channels";
+import {
+  CHANNELS,
+  fitScore,
+  suggestPairs,
+  referrerMatchesChannel,
+  channelHasSharedReferrerHost
+} from "../src/channels";
 import type { ChannelKind } from "../src/channels";
 import { CONFIG } from "../src/config";
 
@@ -60,5 +66,64 @@ describe("channels", () => {
 
   it("config projects reference valid repos", () => {
     for (const p of CONFIG.projects) expect(p.repo).toMatch(/^[\w.-]+\/[\w.-]+$/);
+  });
+});
+
+describe("referrer hosts", () => {
+  const byId = (id: string) => {
+    const c = CHANNELS.find(x => x.id === id);
+    if (!c) throw new Error(`no channel ${id}`);
+    return c;
+  };
+
+  it("every channel declares referrerHosts (possibly empty, never missing)", () => {
+    for (const c of CHANNELS) expect(Array.isArray(c.referrerHosts)).toBe(true);
+  });
+
+  it("matches the publication host, which is not the submission host", () => {
+    const weekly = byId("ruanyf-weekly");
+    // Submitted at github.com, published at ruanyifeng.com. Keying off the
+    // channel's own `url` host would have credited every GitHub referral to it.
+    expect(weekly.url).toContain("github.com");
+    expect(referrerMatchesChannel("ruanyifeng.com", weekly)).toBe(true);
+    expect(referrerMatchesChannel("github.com", weekly)).toBe(false);
+  });
+
+  it("matches subdomains but not lookalike suffixes", () => {
+    const v2ex = byId("v2ex");
+    expect(referrerMatchesChannel("www.v2ex.com", v2ex)).toBe(true);
+    expect(referrerMatchesChannel("v2ex.com", v2ex)).toBe(true);
+    expect(referrerMatchesChannel("notv2ex.com", v2ex)).toBe(false);
+    expect(referrerMatchesChannel("v2ex.com.evil.net", v2ex)).toBe(false);
+  });
+
+  it("appinn claims both its forum and its article site", () => {
+    const appinn = byId("appinn");
+    // meta.appinn.net is not a subdomain of appinn.com, so suffix matching
+    // alone would miss the forum — the real submission surface, and where
+    // shotsync's 15 referred views actually came from.
+    expect(referrerMatchesChannel("meta.appinn.net", appinn)).toBe(true);
+    expect(referrerMatchesChannel("appinn.com", appinn)).toBe(true);
+  });
+
+  it("ignores GitHub's non-hostname referrer labels", () => {
+    // Real referrer data contains entries like "Google" that are not hosts.
+    for (const c of CHANNELS) expect(referrerMatchesChannel("Google", c)).toBe(false);
+  });
+
+  it("flags channels that share a publication host", () => {
+    // All four subreddits publish under reddit.com, so a reddit.com referral
+    // cannot be pinned to one of them.
+    expect(channelHasSharedReferrerHost(byId("r-macapps"))).toBe(true);
+    expect(channelHasSharedReferrerHost(byId("r-selfhosted"))).toBe(true);
+    expect(channelHasSharedReferrerHost(byId("ruanyf-weekly"))).toBe(false);
+  });
+
+  it("declares off-web and un-attributable channels as unobservable", () => {
+    // GitHubDaily publishes via 微博/公众号 (no referrer); an awesome-list merge
+    // arrives as bare github.com, which is indistinguishable from GitHub's own
+    // trending and search surfaces.
+    expect(byId("githubdaily").referrerHosts).toEqual([]);
+    expect(byId("awesome-mac").referrerHosts).toEqual([]);
   });
 });

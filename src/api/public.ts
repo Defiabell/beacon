@@ -1,13 +1,22 @@
 import type { Env, RepoDaily, ReferrerRow, Post, PostMetrics, Todo, CheckResult, SourceRun } from "../types";
 import type { ProjectConfig } from "../config";
 import { CONFIG } from "../config";
-import { CHANNELS, suggestPairs, type Suggestion, type ChannelKind } from "../channels";
+import {
+  CHANNELS,
+  suggestPairs,
+  referrerMatchesChannel,
+  channelHasSharedReferrerHost,
+  type Suggestion,
+  type ChannelKind,
+  type Channel
+} from "../channels";
 import { classifyDay } from "../impact/classify";
 import {
   getStarSeries,
   getRepoSeries,
   getAllRepoDaily,
   getLatestReferrers,
+  getPeakReferrers,
   listPosts,
   listPostsForImpact,
   latestPostMetrics,
@@ -17,7 +26,8 @@ import {
   getTopOpenTodos,
   getSitePvSum,
   listAuditResults,
-  type PostForImpact
+  type PostForImpact,
+  type PeakReferrer
 } from "../db";
 import {
   shiftDate,
@@ -99,11 +109,39 @@ export interface MatrixEffect {
   days: number;
 }
 
+// What this channel actually referred to the project's repo, read straight out
+// of GitHub's traffic referrers rather than inferred from a time window.
+//
+// This exists because `effect` above cannot separate two channels that fire in
+// the same week: it credits an event with whatever the repo did in the ±7 days
+// around it, so a submission that lands inside somebody else's wave inherits
+// that wave. Not hypothetical — shotsync's GitHubDaily submission (2026-08-24,
+// never picked up, still zero comments and zero labels) was being shown as +128
+// views / +14 stars, every one of which belonged to 阮一峰周刊's 08-21 spike.
+// Referrers do not have that failure mode: they are attributed by construction.
+export interface ReferredTraffic {
+  views: number;
+  uniques: number;
+  // Snapshot dates bounding the observation. Useful for telling "arrived and
+  // stopped" (a frozen lastSeen) from "still arriving".
+  firstSeen: string | null;
+  lastSeen: string | null;
+  // This channel shares its publication host with another channel, so the
+  // numbers describe the host, not this channel alone.
+  sharedHost: boolean;
+}
+
 export interface MatrixCoverageRow {
   project: string;
   channelId: string;
   status: string;
   effect?: MatrixEffect;
+  // undefined = the channel declares no referrer hosts, i.e. it is not
+  // observable this way at all (publishes off-web, or its host is too generic
+  // to attribute). A present object with views 0 is the opposite and much
+  // stronger claim: the channel is observable and referred nobody. Collapsing
+  // those two into one "0" is exactly the mistake this field exists to avoid.
+  referred?: ReferredTraffic;
 }
 
 // `url`/`kind`/`howTo` all already existed on src/channels.ts's Channel but
@@ -303,6 +341,25 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents };
 }
 
+// Sums every referrer host the channel claims. A channel can legitimately own
+// more than one (小众软件 owns both its forum and its article site) and a repo
+// can be referred by several of them at once.
+//
+// Exported for direct unit testing: the whole point is which of three outcomes
+// you get — undefined (unobservable), zeroes (observable, referred nobody), or
+// real numbers — and routing that through D1 would obscure it.
+export function referredTrafficFor(channel: Channel, peaks: PeakReferrer[]): ReferredTraffic | undefined {
+  if (channel.referrerHosts.length === 0) return undefined;
+  const hits = peaks.filter(p => referrerMatchesChannel(p.referrer, channel));
+  return {
+    views: hits.reduce((n, h) => n + h.views, 0),
+    uniques: hits.reduce((n, h) => n + h.uniques, 0),
+    firstSeen: hits.length ? hits.map(h => h.firstSeen).sort()[0] : null,
+    lastSeen: hits.length ? hits.map(h => h.lastSeen).sort().slice(-1)[0] : null,
+    sharedHost: channelHasSharedReferrerHost(channel)
+  };
+}
+
 export async function buildMatrix(env: Env): Promise<MatrixData> {
   const db = env.DB;
   const rawCoverage = await listProjectChannels(db);
@@ -315,10 +372,20 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
   const postedWithPostId = rawCoverage.filter(r => r.status === "posted" && r.postId != null);
   const impactByPostId = postedWithPostId.length > 0 ? await buildImpactByPostId(env) : new Map<number, EventImpact>();
 
+  // One query per project rather than one per cell: the peak-referrer set is a
+  // property of the repo, and every channel row for that project reads from it.
+  const peaksByProject = new Map<string, PeakReferrer[]>();
+  for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
+
   const richCoverage: MatrixCoverageRow[] = coverage.map(c => {
     const raw = rawCoverage.find(r => r.project === c.project && r.channelId === c.channelId);
     const impact = raw?.postId != null ? impactByPostId.get(raw.postId) : undefined;
-    return { ...c, effect: impact ? toMatrixEffect(impact) : undefined };
+    const channel = CHANNELS.find(ch => ch.id === c.channelId);
+    return {
+      ...c,
+      effect: impact ? toMatrixEffect(impact) : undefined,
+      referred: channel ? referredTrafficFor(channel, peaksByProject.get(c.project) ?? []) : undefined
+    };
   });
 
   return {

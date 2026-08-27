@@ -21,6 +21,20 @@ export interface Channel {
   // itself (not per-project state), so it lives in code next to the channel
   // rather than in D1.
   howTo: string;
+  // Hostnames that show up in GitHub's traffic referrers when this channel
+  // sends someone to a repo — the *publication* host, which is frequently NOT
+  // the host in `url` above (that one is where you submit). 阮一峰周刊 is
+  // submitted at github.com but publishes at ruanyifeng.com; 小众软件 is
+  // submitted at meta.appinn.net, and a post the editors pick up becomes an
+  // article on appinn.com. Matched by exact host or subdomain suffix.
+  //
+  // An EMPTY array means "not observable through referrers" — either the
+  // channel publishes off-web (GitHubDaily goes out via 微博/公众号, which send
+  // no referrer) or its host is too generic to attribute (an awesome-list merge
+  // arrives as plain github.com, indistinguishable from GitHub's own trending
+  // and search surfaces). That is deliberately NOT the same as "matched
+  // nothing", which means the channel really did send zero traffic.
+  referrerHosts: string[];
 }
 
 export const CHANNELS: Channel[] = [
@@ -32,7 +46,8 @@ export const CHANNELS: Channel[] = [
     tags: ["tool", "web", "game", "macos", "ai", "selfhosted", "zh"],
     kind: "post",
     howTo:
-      "在「分享创造」节点发帖：一句话定位 + 一张能一眼看懂的截图 + 仓库链接，标题别带营销口气。发完当天守着回帖，V2EX 的曝光靠回复顶上去。"
+      "在「分享创造」节点发帖：一句话定位 + 一张能一眼看懂的截图 + 仓库链接，标题别带营销口气。发完当天守着回帖，V2EX 的曝光靠回复顶上去。",
+    referrerHosts: ["v2ex.com"]
   },
   {
     id: "linuxdo",
@@ -42,7 +57,8 @@ export const CHANNELS: Channel[] = [
     tags: ["zh"],
     kind: "post",
     howTo:
-      "⚠️ 2026-08 实测转化极低（开源推广帖 2 uniques，对照阮一峰周刊 223）：新号权重低 + 推广帖审核延迟会完全错过 Discourse 的时间线窗口，且社区主流注意力在 AI 资源/羊毛而非开源自荐。定位改为长线：日常养号、在相关讨论里自然提及项目，不再专门发推广帖。若仍要发：#开源推广 申明模板 + README 友链 + AI 文案必须截图发出；beacon 抓不到它的帖子指标（出口 IP 被挡）。"
+      "⚠️ 2026-08 实测转化极低（开源推广帖 2 uniques，对照阮一峰周刊 223）：新号权重低 + 推广帖审核延迟会完全错过 Discourse 的时间线窗口，且社区主流注意力在 AI 资源/羊毛而非开源自荐。定位改为长线：日常养号、在相关讨论里自然提及项目，不再专门发推广帖。若仍要发：#开源推广 申明模板 + README 友链 + AI 文案必须截图发出；beacon 抓不到它的帖子指标（出口 IP 被挡）。",
+    referrerHosts: ["linux.do"]
   },
   {
     id: "sspai",
@@ -52,7 +68,8 @@ export const CHANNELS: Channel[] = [
     tags: ["macos", "tool", "ai", "zh"],
     kind: "pitch",
     howTo:
-      "Matrix 是投稿制：注册后写一篇完整的使用体验文投给编辑，过审才会推首页。适合 macOS 效率工具，周期以周计，不是当天见效的渠道。"
+      "Matrix 是投稿制：注册后写一篇完整的使用体验文投给编辑，过审才会推首页。适合 macOS 效率工具，周期以周计，不是当天见效的渠道。",
+    referrerHosts: ["sspai.com"]
   },
   {
     id: "appinn",
@@ -61,7 +78,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["macos", "tool", "selfhosted", "zh"],
     kind: "pitch",
-    howTo: "走站内投稿入口自荐，给一句话介绍、截图和下载地址，由编辑筛选后成文。工具类命中率高于内容类。"
+    howTo: "走站内投稿入口自荐，给一句话介绍、截图和下载地址，由编辑筛选后成文。工具类命中率高于内容类。",
+    referrerHosts: ["appinn.com", "meta.appinn.net"]
   },
   {
     id: "jike",
@@ -70,7 +88,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "ai", "game", "zh"],
     kind: "post",
-    howTo: "个人动态发短图文，配一张截图，带上相关圈子扩散。适合发过程和小更新，长文没人看。"
+    howTo: "个人动态发短图文，配一张截图，带上相关圈子扩散。适合发过程和小更新，长文没人看。",
+    referrerHosts: ["okjike.com"]
   },
   {
     id: "eleduck",
@@ -79,7 +98,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "web", "zh"],
     kind: "post",
-    howTo: "受众是远程和独立开发者，吃「我为什么做这个、做了多久、赚不赚钱」的过程叙事；纯功能介绍反响一般。"
+    howTo: "受众是远程和独立开发者，吃「我为什么做这个、做了多久、赚不赚钱」的过程叙事；纯功能介绍反响一般。",
+    referrerHosts: ["eleduck.com"]
   },
   {
     id: "juejin",
@@ -88,7 +108,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["web", "ai", "tool", "zh"],
     kind: "post",
-    howTo: "写一篇技术实现文（架构选择、踩过的坑），文末再带仓库。掘金吃「怎么做的」，不吃「我做了个」。"
+    howTo: "写一篇技术实现文（架构选择、踩过的坑），文末再带仓库。掘金吃「怎么做的」，不吃「我做了个」。",
+    referrerHosts: ["juejin.cn"]
   },
   {
     id: "indienova",
@@ -97,7 +118,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["game", "zh"],
     kind: "post",
-    howTo: "建游戏页面并发开发日志。中文独立游戏受众最集中的地方，适合连载式更新而非一次性公告。"
+    howTo: "建游戏页面并发开发日志。中文独立游戏受众最集中的地方，适合连载式更新而非一次性公告。",
+    referrerHosts: ["indienova.com"]
   },
   {
     id: "gcores",
@@ -106,7 +128,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["game", "zh"],
     kind: "post",
-    howTo: "偏游戏文化内容，适合写设计思路和灵感来源而不是发布公告。门槛高，但读者精准。"
+    howTo: "偏游戏文化内容，适合写设计思路和灵感来源而不是发布公告。门槛高，但读者精准。",
+    referrerHosts: ["gcores.com"]
   },
   {
     id: "itchio",
@@ -116,7 +139,8 @@ export const CHANNELS: Channel[] = [
     tags: ["game", "web", "en"],
     kind: "listing",
     howTo:
-      "免费建一个游戏页面，上传 web 构建或填外链，必须配封面图和一段 GIF。itch.io 自带搜索和分类流量，属于长尾——挂上去就一直在。"
+      "免费建一个游戏页面，上传 web 构建或填外链，必须配封面图和一段 GIF。itch.io 自带搜索和分类流量，属于长尾——挂上去就一直在。",
+    referrerHosts: ["itch.io"]
   },
   {
     id: "show-hn",
@@ -126,7 +150,8 @@ export const CHANNELS: Channel[] = [
     tags: ["tool", "selfhosted", "web", "ai", "game", "en"],
     kind: "post",
     howTo:
-      "标题格式固定：`Show HN: 项目名 – 一句话说明`。发布后立刻自己回一条评论讲背景和技术选择。一个项目基本只有一次机会，选美西工作日早上发，别顺手用掉。"
+      "标题格式固定：`Show HN: 项目名 – 一句话说明`。发布后立刻自己回一条评论讲背景和技术选择。一个项目基本只有一次机会，选美西工作日早上发，别顺手用掉。",
+    referrerHosts: ["news.ycombinator.com"]
   },
   {
     id: "producthunt",
@@ -136,7 +161,8 @@ export const CHANNELS: Channel[] = [
     tags: ["tool", "macos", "ai", "en"],
     kind: "post",
     howTo:
-      "要提前备好 logo、画廊图、tagline，并选定一个发布日。PH 主要奖励已经有英文受众积累的产品，零关注冷启动效果有限——别把它当第一站。"
+      "要提前备好 logo、画廊图、tagline，并选定一个发布日。PH 主要奖励已经有英文受众积累的产品，零关注冷启动效果有限——别把它当第一站。",
+    referrerHosts: ["producthunt.com"]
   },
   {
     id: "r-selfhosted",
@@ -146,7 +172,8 @@ export const CHANNELS: Channel[] = [
     tags: ["selfhosted", "en"],
     kind: "post",
     howTo:
-      "先读 sub 规则（多数禁纯推广）。用「我自建了 X 来解决 Y」的第一人称写法，明确标注自己是作者，不要只贴链接。beacon 抓不到 Reddit 数字。"
+      "先读 sub 规则（多数禁纯推广）。用「我自建了 X 来解决 Y」的第一人称写法，明确标注自己是作者，不要只贴链接。beacon 抓不到 Reddit 数字。",
+    referrerHosts: ["reddit.com"]
   },
   {
     id: "r-macapps",
@@ -155,7 +182,8 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["macos", "en"],
     kind: "post",
-    howTo: "带截图，并在正文明确写清免费/付费和是否开源。社区对作者自荐宽容，但要求标明身份。beacon 抓不到 Reddit 数字。"
+    howTo: "带截图，并在正文明确写清免费/付费和是否开源。社区对作者自荐宽容，但要求标明身份。beacon 抓不到 Reddit 数字。",
+    referrerHosts: ["reddit.com"]
   },
   {
     id: "r-sideproject",
@@ -164,7 +192,8 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["tool", "web", "game", "ai", "en"],
     kind: "post",
-    howTo: "允许自荐，适合发「我做了什么、目前数据如何」。一张截图加一句话就够，长篇反而没人读。beacon 抓不到 Reddit 数字。"
+    howTo: "允许自荐，适合发「我做了什么、目前数据如何」。一张截图加一句话就够，长篇反而没人读。beacon 抓不到 Reddit 数字。",
+    referrerHosts: ["reddit.com"]
   },
   {
     id: "r-webgames",
@@ -173,7 +202,8 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["game", "web", "en"],
     kind: "post",
-    howTo: "直接贴可玩链接。前提是点开即玩——要注册、要下载、加载慢的一律沉底。beacon 抓不到 Reddit 数字。"
+    howTo: "直接贴可玩链接。前提是点开即玩——要注册、要下载、加载慢的一律沉底。beacon 抓不到 Reddit 数字。",
+    referrerHosts: ["reddit.com"]
   },
   {
     id: "awesome-selfhosted",
@@ -183,7 +213,8 @@ export const CHANNELS: Channel[] = [
     tags: ["selfhosted", "en"],
     kind: "list-pr",
     howTo:
-      "fork 仓库，按 README 里既有条目的格式加一行（名称、一句话、demo、License、语言），提 PR。收录门槛包括已有 LICENSE 和像样的文档，先过体检再来。"
+      "fork 仓库，按 README 里既有条目的格式加一行（名称、一句话、demo、License、语言），提 PR。收录门槛包括已有 LICENSE 和像样的文档，先过体检再来。",
+    referrerHosts: []
   },
   {
     id: "ruanyf-weekly",
@@ -193,7 +224,8 @@ export const CHANNELS: Channel[] = [
     tags: ["tool", "web", "macos", "ai", "selfhosted", "zh"],
     kind: "pitch",
     howTo:
-      "去 ruanyf/weekly 仓库找当期的投稿 issue，按格式回复一条自荐（一句话 + 链接）。每周五出刊，命中率不高，但一次只花十分钟，值得反复投。"
+      "去 ruanyf/weekly 仓库找当期的投稿 issue，按格式回复一条自荐（一句话 + 链接）。每周五出刊，命中率不高，但一次只花十分钟，值得反复投。",
+    referrerHosts: ["ruanyifeng.com"]
   },
   {
     id: "hellogithub",
@@ -202,7 +234,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "web", "ai", "selfhosted", "zh"],
     kind: "pitch",
-    howTo: "在官网或仓库的推荐入口提交项目。要求 README 完整、有截图、能跑起来。一旦被月刊收录会带来一波稳定的中文流量。"
+    howTo: "在官网或仓库的推荐入口提交项目。要求 README 完整、有截图、能跑起来。一旦被月刊收录会带来一波稳定的中文流量。",
+    referrerHosts: ["hellogithub.com"]
   },
   {
     id: "zhihu",
@@ -211,7 +244,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "ai", "game", "zh"],
     kind: "post",
-    howTo: "写回答通常比写文章有效：搜「有哪些好用的 X」这类现成问题，在答案里自然带出项目。回答会被搜索和推荐反复带出来，专栏文章主要触达已关注的人。"
+    howTo: "写回答通常比写文章有效：搜「有哪些好用的 X」这类现成问题，在答案里自然带出项目。回答会被搜索和推荐反复带出来，专栏文章主要触达已关注的人。",
+    referrerHosts: ["zhihu.com"]
   },
   {
     id: "xiaohongshu",
@@ -220,7 +254,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "ai", "zh"],
     kind: "post",
-    howTo: "图片优先：做 3—5 张竖版图讲清「解决什么问题」，第一张图就是标题。正文短、带话题标签。站内不方便放外链，靠评论区或简介引导。"
+    howTo: "图片优先：做 3—5 张竖版图讲清「解决什么问题」，第一张图就是标题。正文短、带话题标签。站内不方便放外链，靠评论区或简介引导。",
+    referrerHosts: ["xiaohongshu.com"]
   },
   {
     id: "wechat-mp",
@@ -229,7 +264,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "ai", "zh"],
     kind: "post",
-    howTo: "适合放长文复盘，沉淀给已关注的人看。公众号几乎没有站内分发，不要指望它拉新——它是留存渠道，不是曝光渠道。"
+    howTo: "适合放长文复盘，沉淀给已关注的人看。公众号几乎没有站内分发，不要指望它拉新——它是留存渠道，不是曝光渠道。",
+    referrerHosts: ["mp.weixin.qq.com"]
   },
   {
     id: "bilibili",
@@ -238,7 +274,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "game", "ai", "zh"],
     kind: "post",
-    howTo: "录一段 60 秒以内的演示，标题直接写结果。交互类工具和游戏用视频说明远胜截图，代价是制作成本高一档。"
+    howTo: "录一段 60 秒以内的演示，标题直接写结果。交互类工具和游戏用视频说明远胜截图，代价是制作成本高一档。",
+    referrerHosts: ["bilibili.com"]
   },
   {
     id: "awesome-tauri",
@@ -247,7 +284,8 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["macos", "tool", "en"],
     kind: "list-pr",
-    howTo: "⚠️ 2026-08 实测：已不收录应用（Apps 区被移除，PR 模板加了 no-application rule），只收 Guides/Templates/Plugins/Integrations。Tauri 应用的收录改走 awesome-mac。"
+    howTo: "⚠️ 2026-08 实测：已不收录应用（Apps 区被移除，PR 模板加了 no-application rule），只收 Guides/Templates/Plugins/Integrations。Tauri 应用的收录改走 awesome-mac。",
+    referrerHosts: []
   },
   {
     id: "awesome-mac",
@@ -256,7 +294,8 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["macos", "tool", "en"],
     kind: "list-pr",
-    howTo: "fork jaywcjlove/awesome-mac，找到对应分类加条目，开源和免费要按 README 约定打上标记，然后提 PR。"
+    howTo: "fork jaywcjlove/awesome-mac，找到对应分类加条目，开源和免费要按 README 约定打上标记，然后提 PR。",
+    referrerHosts: []
   },
   {
     id: "alternativeto",
@@ -266,7 +305,8 @@ export const CHANNELS: Channel[] = [
     tags: ["tool", "web", "selfhosted", "macos", "en"],
     kind: "listing",
     howTo:
-      "登记一个产品页，填 logo、截图和描述。最关键的字段是「它是谁的替代品」——这个平台整个产品形态就是围绕替代关系组织的，这一栏填不准，条目基本不会被翻到。"
+      "登记一个产品页，填 logo、截图和描述。最关键的字段是「它是谁的替代品」——这个平台整个产品形态就是围绕替代关系组织的，这一栏填不准，条目基本不会被翻到。",
+    referrerHosts: ["alternativeto.net"]
   },
   {
     id: "githubdaily",
@@ -275,7 +315,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "ai", "web", "macos", "zh"],
     kind: "pitch",
-    howTo: "在仓库开 issue 推荐或自荐（README 明确欢迎）。编辑选中后发微博 + 公众号双端，中文圈转化天花板与阮一峰周刊同级。写清一句话卖点和仓库链接即可，别写长文。"
+    howTo: "在仓库开 issue 推荐或自荐（README 明确欢迎）。编辑选中后发微博 + 公众号双端，中文圈转化天花板与阮一峰周刊同级。写清一句话卖点和仓库链接即可，别写长文。",
+    referrerHosts: []
   },
   {
     id: "tw93-weekly",
@@ -284,7 +325,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "macos", "web", "ai", "zh"],
     kind: "pitch",
-    howTo: "在 tw93/weekly 的 discussions/22 楼层里回帖推荐（不是开 issue）。周刊偏好设计感好、能直接玩的工具，附一句为什么好用 + 链接。"
+    howTo: "在 tw93/weekly 的 discussions/22 楼层里回帖推荐（不是开 issue）。周刊偏好设计感好、能直接玩的工具，附一句为什么好用 + 链接。",
+    referrerHosts: ["weekly.tw93.fun", "tw93.fun"]
   },
   {
     id: "oschina",
@@ -293,7 +335,8 @@ export const CHANNELS: Channel[] = [
     lang: "zh",
     tags: ["tool", "web", "selfhosted", "zh"],
     kind: "listing",
-    howTo: "注册后在软件频道提交开源项目收录，生成常驻项目主页（长尾 SEO）。入口和审核细节未实测，首次提交时留意表单要求。"
+    howTo: "注册后在软件频道提交开源项目收录，生成常驻项目主页（长尾 SEO）。入口和审核细节未实测，首次提交时留意表单要求。",
+    referrerHosts: ["oschina.net"]
   },
   {
     id: "console-dev",
@@ -302,7 +345,8 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["tool", "selfhosted", "en"],
     kind: "pitch",
-    howTo: "英文 devtools 周刊，编辑双人评审制。无提交表单，邮件 hello@console.dev 简短自荐；先读 selection-criteria 页，强调 free/open-source 与 5 分钟可上手。"
+    howTo: "英文 devtools 周刊，编辑双人评审制。无提交表单，邮件 hello@console.dev 简短自荐；先读 selection-criteria 页，强调 free/open-source 与 5 分钟可上手。",
+    referrerHosts: ["console.dev"]
   },
   {
     id: "selfhst",
@@ -311,12 +355,44 @@ export const CHANNELS: Channel[] = [
     lang: "en",
     tags: ["selfhosted", "en"],
     kind: "pitch",
-    howTo: "This Week in Self-Hosted 每周收录新发布的 self-hosted 软件。站点对爬虫 403，提交入口需人工打开确认（通常在 content/about 页）；它也扫 r/selfhosted 的 Megathread——在那里发过评论本身就有被动收录机会。"
+    howTo: "This Week in Self-Hosted 每周收录新发布的 self-hosted 软件。站点对爬虫 403，提交入口需人工打开确认（通常在 content/about 页）；它也扫 r/selfhosted 的 Megathread——在那里发过评论本身就有被动收录机会。",
+    referrerHosts: ["selfh.st"]
   }
 ];
 
 export function fitScore(project: ProjectConfig, channel: Channel): number {
   return channel.tags.filter(t => project.tags.includes(t)).length;
+}
+
+// Exact host or subdomain suffix. Deliberately NOT "contains": a suffix test
+// keeps "notappinn.com" from matching "appinn.com". Note that meta.appinn.net
+// is not a subdomain of appinn.com, which is why the appinn channel has to
+// declare both hosts rather than relying on suffix matching to cover the forum.
+//
+// GitHub also reports some referrers as labels rather than hostnames ("Google"
+// shows up that way in real data); those simply match nothing.
+function hostMatchesReferrer(referrer: string, host: string): boolean {
+  const r = referrer.toLowerCase();
+  const h = host.toLowerCase();
+  return r === h || r.endsWith("." + h);
+}
+
+export function referrerMatchesChannel(referrer: string, channel: Channel): boolean {
+  return channel.referrerHosts.some(h => hostMatchesReferrer(referrer, h));
+}
+
+// Hosts claimed by more than one channel. Traffic from these cannot be pinned to
+// a single channel — all four subreddits publish under reddit.com, so a
+// reddit.com referrer says "some subreddit" and nothing finer. Callers surface
+// this rather than silently crediting whichever channel they looked at first.
+const SHARED_REFERRER_HOSTS: Set<string> = (() => {
+  const seen = new Map<string, number>();
+  for (const c of CHANNELS) for (const h of c.referrerHosts) seen.set(h, (seen.get(h) ?? 0) + 1);
+  return new Set([...seen].filter(([, n]) => n > 1).map(([h]) => h));
+})();
+
+export function channelHasSharedReferrerHost(channel: Channel): boolean {
+  return channel.referrerHosts.some(h => SHARED_REFERRER_HOSTS.has(h));
 }
 
 export interface Suggestion { project: string; channelId: string; channelName: string; score: number; }

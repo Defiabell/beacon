@@ -6,6 +6,7 @@ import { CHANNELS, suggestPairs } from "../src/channels";
 import {
   handlePublicApi,
   computeStarsDelta,
+  referredTrafficFor,
   type Overview,
   type ProjectDetail,
   type MatrixData,
@@ -286,6 +287,52 @@ describe("GET /api/todos", () => {
   });
 });
 
+describe("referredTrafficFor", () => {
+  const byId = (id: string) => {
+    const c = CHANNELS.find(x => x.id === id);
+    if (!c) throw new Error(`no channel ${id}`);
+    return c;
+  };
+  const peak = (referrer: string, views: number, uniques: number, firstSeen = "2026-08-20", lastSeen = "2026-08-27") =>
+    ({ referrer, views, uniques, firstSeen, lastSeen });
+
+  it("returns undefined for a channel that declares no referrer hosts", () => {
+    // Not "zero traffic" — "cannot be observed this way at all". Conflating the
+    // two is what let a never-published GitHubDaily submission look measured.
+    expect(referredTrafficFor(byId("githubdaily"), [peak("ruanyifeng.com", 506, 298)])).toBeUndefined();
+  });
+
+  it("returns zeroes for an observable channel that referred nobody", () => {
+    const r = referredTrafficFor(byId("hellogithub"), [peak("ruanyifeng.com", 506, 298)]);
+    expect(r).toEqual({ views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false });
+  });
+
+  it("sums every host a channel claims", () => {
+    const r = referredTrafficFor(byId("appinn"), [
+      peak("meta.appinn.net", 15, 8, "2026-08-19", "2026-08-27"),
+      peak("appinn.com", 4, 3, "2026-08-22", "2026-08-25"),
+      peak("ruanyifeng.com", 506, 298)
+    ]);
+    expect(r?.views).toBe(19);
+    expect(r?.uniques).toBe(11);
+    // Bounds span the union of the matched hosts, earliest first / latest last.
+    expect(r?.firstSeen).toBe("2026-08-19");
+    expect(r?.lastSeen).toBe("2026-08-27");
+  });
+
+  it("marks shared-host channels so their numbers are not read as exclusive", () => {
+    const peaks = [peak("reddit.com", 40, 30)];
+    const a = referredTrafficFor(byId("r-macapps"), peaks);
+    const b = referredTrafficFor(byId("r-selfhosted"), peaks);
+    // Both legitimately report the same 40 — that is the host's traffic, and
+    // the flag is the only thing stopping a reader from double-counting it.
+    expect(a?.views).toBe(40);
+    expect(b?.views).toBe(40);
+    expect(a?.sharedHost).toBe(true);
+    expect(b?.sharedHost).toBe(true);
+  });
+});
+
 describe("GET /api/matrix", () => {
   it("returns projects, channels, coverage, and suggestions", async () => {
     const res = await call("GET", "/api/matrix");
@@ -300,7 +347,18 @@ describe("GET /api/matrix", () => {
       kind: CHANNELS[0].kind,
       howTo: CHANNELS[0].howTo
     });
-    expect(body.coverage).toEqual([{ project: "nightide", channelId: "v2ex", status: "posted" }]);
+    // v2ex declares a referrer host, so the cell carries a `referred` object
+    // even with no snapshot rows in the fixture — and it reads 0, which is the
+    // claim "observable, referred nobody". A channel that declares no hosts
+    // omits the field entirely instead; see the referredTrafficFor tests.
+    expect(body.coverage).toEqual([
+      {
+        project: "nightide",
+        channelId: "v2ex",
+        status: "posted",
+        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false }
+      }
+    ]);
     expect(body.suggestions.some(s => s.project === "nightide" && s.channelId === "v2ex")).toBe(false);
   });
 });

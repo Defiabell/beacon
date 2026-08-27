@@ -173,6 +173,13 @@ ul.audit li:last-child { border-bottom: 0; }
 /* A posted cell's attached effect (design doc §5 / review item 2) — small and
    muted so it reads as supporting detail under the ✓, not a competing number. */
 .cell-effect { font-size: 10px; font-weight: 400; color: var(--ink-2); white-space: normal; margin-top: 2px; }
+/* The referral line outranks .cell-effect — it is attributed by construction,
+   where the effect line is a time window that can absorb a neighbour's wave.
+   Rendered darker/heavier so the eye lands on the trustworthy number first. */
+.cell-referred { font-size: 10px; font-weight: 600; color: var(--ink-1); white-space: normal; margin-top: 2px; }
+.cell-referred.zero { font-weight: 400; color: var(--ink-2); }
+.cell-referred.unmeasured { font-weight: 400; color: var(--ink-2); font-style: italic; }
+.cell-warn { font-size: 10px; font-weight: 600; color: var(--p1); white-space: normal; }
 .planned { color: var(--ink-2); }
 .sug { display: inline-block; min-width: 34px; padding: 2px 7px; border-radius: 999px; background: var(--sug-bg); color: var(--sug-ink); font-weight: 700; font-size: 12px; }
 .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }

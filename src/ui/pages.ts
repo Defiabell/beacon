@@ -7,7 +7,7 @@
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, PostWithMetrics, ProjectSummary } from "../api/public";
+import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary } from "../api/public";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, ImpactWindow } from "../impact/attribute";
@@ -406,7 +406,7 @@ export function renderMatrix(m: MatrixData, authed: boolean): string {
   const body = `${navHeader("matrix", authed)}
 <main>
 <h1>渠道覆盖矩阵</h1>
-<p class="lead">项目 × 渠道。数字气泡 = 未覆盖且适配的建议（值为标签适配分）。点渠道名去该渠道，下方「怎么发」给每个渠道的具体做法。</p>
+<p class="lead">项目 × 渠道。数字气泡 = 未覆盖且适配的建议（值为标签适配分）。点渠道名去该渠道，下方「怎么发」给每个渠道的具体做法。已发格子里的<strong>「引流 X/Y」</strong>是来自该渠道见刊域名的 GitHub 引荐访问/独立访客，按 referrer 归因，可信；下面那行「浏览 · star」是发帖前后 7 天窗口的变化，会把邻近渠道的流量一并算进来，只作参考。</p>
 <div class="legend"><span class="posted">✓ 已发</span><span class="planned">◷ 计划中</span><span><span class="sug">3</span> 建议（适配分）</span><span class="na">— 不适配</span></div>
 <div class="scroll"><table class="matrix-table"><thead><tr><th></th>${headCells}</tr></thead><tbody>${rows}</tbody></table></div>
 <p class="hint">建议分 = 项目标签与渠道标签交集数，只衡量话题对不对口，<strong>不衡量成本和触达</strong>——分低但十分钟就能做完的渠道（比如周刊自荐），常常比分高的重头发布更值得先做。已覆盖／不适配的组合不再出现在总览的建议行动里。</p>
@@ -429,9 +429,45 @@ function effectSummary(effect: MatrixEffect | undefined): string {
   return `<div class="cell-effect">浏览 ${effect.views} · star ${deltaArrow(effect.starsDelta)}${note}</div>`;
 }
 
+// The referral line, which is the *attributed* number and therefore outranks
+// effectSummary above. Three distinct states, deliberately never collapsed:
+//
+//   undefined  -> the channel publishes somewhere referrers can't see (微博/
+//                 公众号, email) or under a host too generic to attribute. We
+//                 know nothing, and saying "0" would be a lie.
+//   views === 0 -> we can see this channel's host and it sent nobody. A real,
+//                 much stronger finding than "unknown".
+//   views > 0   -> what it actually sent.
+function referredSummary(referred: ReferredTraffic | undefined): string {
+  if (!referred) {
+    return `<div class="cell-referred unmeasured" title="该渠道在站外发布（微博/公众号/邮件）或域名过于笼统，referrer 无法归因——这不等于没有效果">referrer 不可测</div>`;
+  }
+  if (referred.views === 0) {
+    return `<div class="cell-referred zero" title="该渠道的见刊域名可观测，但至今没有从它来的访问">引流 0</div>`;
+  }
+  const shared = referred.sharedHost
+    ? `<span class="win-note"> 同域共享</span>`
+    : "";
+  const seen = referred.lastSeen ? ` · 截至 ${esc(referred.lastSeen)}` : "";
+  return `<div class="cell-referred" title="来自该渠道见刊域名的 GitHub 引荐流量（14 天滚动窗口峰值${referred.sharedHost ? "；与同域其他渠道无法区分" : ""}）${seen}">引流 ${referred.views}/${referred.uniques}${shared}</div>`;
+}
+
+// A window-based effect standing next to a referral line that reads zero is the
+// signature of misattribution: the ±7-day window swallowed a neighbouring
+// channel's wave. Say so on the cell instead of letting the number pass as this
+// channel's work.
+function cellMetrics(cov: MatrixCoverageRow | undefined): string {
+  if (!cov) return "";
+  const misattributed = cov.referred !== undefined && cov.referred.views === 0 && (cov.effect?.views ?? 0) > 0;
+  const warn = misattributed
+    ? `<div class="cell-warn" title="窗口法把附近其他渠道的流量算了进来，以「引流」为准">↑ 疑为他渠道流量</div>`
+    : "";
+  return referredSummary(cov.referred) + effectSummary(cov.effect) + warn;
+}
+
 // Read-only cell — exactly today's markup, used for anonymous visitors.
 function matrixStaticCell(cov: MatrixCoverageRow | undefined, score: number | undefined): string {
-  if (cov?.status === "posted") return `<td class="posted" title="已发布">✓${effectSummary(cov.effect)}</td>`;
+  if (cov?.status === "posted") return `<td class="posted" title="已发布">✓${cellMetrics(cov)}</td>`;
   if (cov?.status === "planned") return `<td class="planned" title="计划中">◷</td>`;
   if (cov?.status === "na") return `<td class="na">—</td>`;
   return score ? `<td><span class="sug">${score}</span></td>` : `<td class="na">—</td>`;
@@ -473,7 +509,7 @@ function matrixFormCell(
     `<input type="hidden" name="returnTo" value="/matrix">` +
     `<select name="status" class="cell-select" aria-label="${esc(projectName)} × ${esc(c.name)}">${matrixCellOptions(cov?.status, score)}</select>` +
     `<button type="submit" class="cell-go" aria-label="保存">✓</button>` +
-    `</form>${effectSummary(cov?.effect)}</td>`
+    `</form>${cov?.status === "posted" ? cellMetrics(cov) : ""}</td>`
   );
 }
 
