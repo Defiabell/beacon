@@ -7,7 +7,7 @@
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary } from "../api/public";
+import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SurfaceBreakdown } from "../api/public";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, ImpactWindow } from "../impact/attribute";
@@ -179,6 +179,46 @@ function projectCard(p: ProjectSummary): string {
 </div>`;
 }
 
+// 「流量来自哪种地方」— the passive counterpart to the channel matrix. Answers
+// a question the matrix structurally cannot: traffic arriving from places
+// nobody posted to (search, AI answer engines, RSS, sites that scraped you).
+//
+// Empty rows are rendered, not filtered. "0 from AI answer engines" is the
+// finding, and dropping empty rows would hide exactly the row this was built
+// to show.
+function surfacesSection(s: SurfaceBreakdown): string {
+  const rows = s.surfaces
+    .map(r => {
+      const hosts = r.hosts.length ? `<span class="src">${esc(r.hosts.slice(0, 4).join(" · "))}${r.hosts.length > 4 ? " …" : ""}</span>` : "";
+      const nums = r.views === 0 ? `<span class="effect">—</span>` : `<span class="effect">${r.views} / ${r.uniques}</span>`;
+      return (
+        `<li${r.views === 0 ? ' class="dim"' : ""}>` +
+        `<span class="proj" title="${esc(r.note)}">${esc(r.name)}</span>${hosts}${nums}</li>`
+      );
+    })
+    .join("");
+
+  // Unclassified referrers are listed by name. An unknown host is either a new
+  // surface worth adding or someone scraping the repo, and both only get
+  // noticed if the name is on the page rather than folded into an "其他" total.
+  const unknown = s.unclassified.length
+    ? `<p class="sub" style="margin-top:10px">未归类来源（新出现的地方，或有人在抓你——按名字看，不要当成一个"其他"合计）：` +
+      s.unclassified
+        .slice(0, 10)
+        .map(u => `${esc(u.referrer)} ${u.views}/${u.uniques}`)
+        .join(" · ") +
+      `</p>`
+    : "";
+
+  const since = s.since ? `自 ${esc(s.since)} 起观测` : "尚无观测数据";
+  return `<section class="actions">
+<h2>流量来自哪种地方</h2>
+<p class="sub">GitHub 引荐来源按性质归类（访问 / 独立访客，取 14 天滚动窗口的历史峰值）。${since}——更早的流量 GitHub 已不再提供，无法回溯。</p>
+<ul class="plain">${rows}</ul>
+${unknown}
+</section>`;
+}
+
 export function renderOverview(o: Overview, authed: boolean): string {
   const actions = actionItems(o).map(renderActionItem).join("") || `<li>暂无待办建议</li>`;
   const cards = o.projects.map(projectCard).join("") || `<p class="sub">暂无项目</p>`;
@@ -191,6 +231,7 @@ ${freshnessBar(o.sources)}
 <ol class="todo">${actions}</ol>
 </section>
 <div class="grid">${cards}</div>
+${surfacesSection(o.surfaces)}
 </main>`;
   return page("beacon · 总览", body);
 }

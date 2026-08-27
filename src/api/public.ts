@@ -11,6 +11,7 @@ import {
   type Channel
 } from "../channels";
 import { classifyDay } from "../impact/classify";
+import { SURFACES, classifyReferrer, type SurfaceId } from "../surfaces";
 import {
   getStarSeries,
   getRepoSeries,
@@ -71,6 +72,7 @@ export interface Overview {
   suggestions: Suggestion[];
   sources: SourceRun[];
   sitePv7d: number;
+  surfaces: SurfaceBreakdown;
 }
 
 export interface PostWithMetrics {
@@ -315,7 +317,11 @@ export async function buildOverview(env: Env): Promise<Overview> {
   ]);
   const projects = await Promise.all(CONFIG.projects.map(p => fetchProjectSummary(db, p, allPosts)));
   const suggestions = suggestPairs(CONFIG.projects, toCoverage(coverageRows));
-  return { projects, topTodos, suggestions, sources, sitePv7d };
+
+  const peaksByProject = new Map<string, PeakReferrer[]>();
+  for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
+
+  return { projects, topTodos, suggestions, sources, sitePv7d, surfaces: buildSurfaceBreakdown(peaksByProject) };
 }
 
 // Returns null when `name` doesn't match a configured project (caller maps
@@ -348,6 +354,76 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   const projectEvents = events.map(e => computeImpact(e, repoDailyAll, starSeries));
 
   return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents };
+}
+
+export interface SurfaceRow {
+  id: SurfaceId;
+  name: string;
+  note: string;
+  views: number;
+  uniques: number;
+  // The specific hosts that landed in this bucket, so a reader can check the
+  // classification instead of trusting it.
+  hosts: string[];
+}
+
+export interface SurfaceBreakdown {
+  surfaces: SurfaceRow[];
+  // Referrers no surface claims, listed individually and never summed into an
+  // anonymous "other" row — see classifyReferrer's comment for why. Descending
+  // by views.
+  unclassified: { referrer: string; views: number; uniques: number }[];
+  // Earliest snapshot across all repos: everything here is bounded by when
+  // beacon started watching, and GitHub only serves a 14-day window, so
+  // traffic older than this was never observable.
+  since: string | null;
+}
+
+// Aggregated across every configured project — the question "is any AI answer
+// engine sending anyone yet?" is about the whole portfolio, not one repo, and
+// per-repo the counts are too small to read.
+export function buildSurfaceBreakdown(peaksByProject: Map<string, PeakReferrer[]>): SurfaceBreakdown {
+  const totals = new Map<SurfaceId, { views: number; uniques: number; hosts: Set<string> }>();
+  const unclassified = new Map<string, { views: number; uniques: number }>();
+  let since: string | null = null;
+
+  for (const peaks of peaksByProject.values()) {
+    for (const p of peaks) {
+      if (since === null || p.firstSeen < since) since = p.firstSeen;
+      const id = classifyReferrer(p.referrer);
+      if (id === null) {
+        const prev = unclassified.get(p.referrer) ?? { views: 0, uniques: 0 };
+        unclassified.set(p.referrer, { views: prev.views + p.views, uniques: prev.uniques + p.uniques });
+        continue;
+      }
+      const prev = totals.get(id) ?? { views: 0, uniques: 0, hosts: new Set<string>() };
+      prev.views += p.views;
+      prev.uniques += p.uniques;
+      prev.hosts.add(p.referrer);
+      totals.set(id, prev);
+    }
+  }
+
+  return {
+    // Every surface is emitted, including empty ones. A zero row is the whole
+    // point for the AI bucket: "nobody has arrived from an AI answer engine" is
+    // a finding, and it disappears if empty rows are filtered out.
+    surfaces: SURFACES.map(s => {
+      const t = totals.get(s.id);
+      return {
+        id: s.id,
+        name: s.name,
+        note: s.note,
+        views: t?.views ?? 0,
+        uniques: t?.uniques ?? 0,
+        hosts: t ? [...t.hosts].sort() : []
+      };
+    }),
+    unclassified: [...unclassified]
+      .map(([referrer, v]) => ({ referrer, ...v }))
+      .sort((a, b) => b.views - a.views),
+    since
+  };
 }
 
 // Sums every referrer host the channel claims. A channel can legitimately own

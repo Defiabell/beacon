@@ -180,6 +180,10 @@ ul.audit li:last-child { border-bottom: 0; }
 .cell-referred.zero { font-weight: 400; color: var(--ink-2); }
 .cell-referred.unmeasured { font-weight: 400; color: var(--ink-2); font-style: italic; }
 .cell-warn { font-size: 10px; font-weight: 600; color: var(--p1); white-space: normal; }
+/* A surface nobody has arrived from is still rendered — dimmed, not hidden,
+   because the zero is the finding. */
+ul.plain li.dim { color: var(--muted); }
+ul.plain li .effect { margin-left: auto; font-variant-numeric: tabular-nums; }
 .planned { color: var(--ink-2); }
 .sug { display: inline-block; min-width: 34px; padding: 2px 7px; border-radius: 999px; background: var(--sug-bg); color: var(--sug-ink); font-weight: 700; font-size: 12px; }
 .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin-bottom: 12px; }
