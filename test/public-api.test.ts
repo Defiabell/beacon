@@ -304,7 +304,7 @@ describe("referredTrafficFor", () => {
 
   it("returns zeroes for an observable channel that referred nobody", () => {
     const r = referredTrafficFor(byId("hellogithub"), [peak("ruanyifeng.com", 506, 298)]);
-    expect(r).toEqual({ views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false });
+    expect(r).toEqual({ views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false, predatesCoverage: false });
   });
 
   it("sums every host a channel claims", () => {
@@ -331,6 +331,34 @@ describe("referredTrafficFor", () => {
     expect(a?.sharedHost).toBe(true);
     expect(b?.sharedHost).toBe(true);
   });
+
+  it("a post older than our first snapshot is 'not watched', not 'referred nobody'", () => {
+    // GitHub serves a 14-day referrer window, so a burst from before our
+    // earliest capture has already rolled out of it and is unrecoverable.
+    // Real case: nightide's V2EX post (2026-07-27) vs beacon's first nightide
+    // snapshot (2026-08-09).
+    const peaks = [
+      { referrer: "github.com", views: 5, uniques: 2, firstSeen: "2026-08-09", lastSeen: "2026-08-27" }
+    ];
+    const older = referredTrafficFor(byId("v2ex"), peaks, "2026-07-27");
+    expect(older?.views).toBe(0);
+    expect(older?.predatesCoverage).toBe(true);
+
+    const newer = referredTrafficFor(byId("v2ex"), peaks, "2026-08-20");
+    expect(newer?.views).toBe(0);
+    expect(newer?.predatesCoverage).toBe(false);
+  });
+
+  it("an unlinked cell claims no post date, so it never claims to predate coverage", () => {
+    const peaks = [
+      { referrer: "github.com", views: 5, uniques: 2, firstSeen: "2026-08-09", lastSeen: "2026-08-27" }
+    ];
+    expect(referredTrafficFor(byId("v2ex"), peaks, null)?.predatesCoverage).toBe(false);
+  });
+
+  it("no snapshots at all also counts as not watching", () => {
+    expect(referredTrafficFor(byId("v2ex"), [], "2026-08-20")?.predatesCoverage).toBe(true);
+  });
 });
 
 describe("GET /api/matrix", () => {
@@ -356,7 +384,7 @@ describe("GET /api/matrix", () => {
         project: "nightide",
         channelId: "v2ex",
         status: "posted",
-        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false }
+        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false, predatesCoverage: false }
       }
     ]);
     expect(body.suggestions.some(s => s.project === "nightide" && s.channelId === "v2ex")).toBe(false);

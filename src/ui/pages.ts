@@ -443,7 +443,12 @@ function referredSummary(referred: ReferredTraffic | undefined): string {
     return `<div class="cell-referred unmeasured" title="该渠道在站外发布（微博/公众号/邮件）或域名过于笼统，referrer 无法归因——这不等于没有效果">referrer 不可测</div>`;
   }
   if (referred.views === 0) {
-    return `<div class="cell-referred zero" title="该渠道的见刊域名可观测，但至今没有从它来的访问">引流 0</div>`;
+    // "We were not watching" and "nobody came" look identical in the data and
+    // must not read identically on the page.
+    if (referred.predatesCoverage) {
+      return `<div class="cell-referred unmeasured" title="该帖早于 beacon 对这个仓库的首份 referrer 快照；GitHub 只提供 14 天滚动窗口，更早的流量已经滚出去了，无法回溯">记录开始前</div>`;
+    }
+    return `<div class="cell-referred zero" title="该渠道的见刊域名可观测，且发帖时 beacon 已在记录，但至今没有从它来的访问">引流 0</div>`;
   }
   const shared = referred.sharedHost
     ? `<span class="win-note"> 同域共享</span>`
@@ -458,7 +463,13 @@ function referredSummary(referred: ReferredTraffic | undefined): string {
 // channel's work.
 function cellMetrics(cov: MatrixCoverageRow | undefined): string {
   if (!cov) return "";
-  const misattributed = cov.referred !== undefined && cov.referred.views === 0 && (cov.effect?.views ?? 0) > 0;
+  // Only a zero we actually observed contradicts a positive window figure; a
+  // zero that just means "not watching yet" contradicts nothing.
+  const misattributed =
+    cov.referred !== undefined &&
+    cov.referred.views === 0 &&
+    !cov.referred.predatesCoverage &&
+    (cov.effect?.views ?? 0) > 0;
   const warn = misattributed
     ? `<div class="cell-warn" title="窗口法把附近其他渠道的流量算了进来，以「引流」为准">↑ 疑为他渠道流量</div>`
     : "";

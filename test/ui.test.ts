@@ -327,7 +327,7 @@ describe("renderMatrix referral line", () => {
         project: "shotsync",
         channelId: "ruanyf-weekly",
         status: "posted",
-        referred: { views: 506, uniques: 298, firstSeen: "2026-08-23", lastSeen: "2026-08-27", sharedHost: false }
+        referred: { views: 506, uniques: 298, firstSeen: "2026-08-23", lastSeen: "2026-08-27", sharedHost: false, predatesCoverage: false }
       }
     ]);
     expect(html).toContain("引流 506/298");
@@ -335,7 +335,7 @@ describe("renderMatrix referral line", () => {
 
   it("distinguishes 'observable but referred nobody' from 'not observable at all'", () => {
     const html = render([
-      { project: "shotsync", channelId: "appinn", status: "posted", referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false } },
+      { project: "shotsync", channelId: "appinn", status: "posted", referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false, predatesCoverage: false } },
       // githubdaily declares no referrer hosts -> `referred` absent entirely.
       { project: "shotsync", channelId: "githubdaily", status: "posted" }
     ]);
@@ -352,7 +352,7 @@ describe("renderMatrix referral line", () => {
         project: "shotsync",
         channelId: "appinn",
         status: "posted",
-        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false },
+        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false, predatesCoverage: false },
         effect: { views: 128, humanClones: 9, starsDelta: 14, status: "collecting", days: 3 }
       }
     ]);
@@ -365,10 +365,26 @@ describe("renderMatrix referral line", () => {
         project: "shotsync",
         channelId: "ruanyf-weekly",
         status: "posted",
-        referred: { views: 506, uniques: 298, firstSeen: "2026-08-23", lastSeen: "2026-08-27", sharedHost: false },
+        referred: { views: 506, uniques: 298, firstSeen: "2026-08-23", lastSeen: "2026-08-27", sharedHost: false, predatesCoverage: false },
         effect: { views: 719, humanClones: 27, starsDelta: 50, status: "complete", days: 7 }
       }
     ]);
+    expect(html).not.toContain("疑为他渠道流量");
+  });
+
+  it("renders a pre-coverage zero as 'not watched', and does not call it misattribution", () => {
+    const html = render([
+      {
+        project: "shotsync",
+        channelId: "appinn",
+        status: "posted",
+        referred: { views: 0, uniques: 0, firstSeen: null, lastSeen: null, sharedHost: false, predatesCoverage: true },
+        effect: { views: 12, humanClones: 1, starsDelta: 0, status: "complete", days: 7 }
+      }
+    ]);
+    expect(html).toContain("记录开始前");
+    expect(html).not.toContain("引流 0");
+    // A zero we never observed contradicts nothing, so the warning must stay off.
     expect(html).not.toContain("疑为他渠道流量");
   });
 });

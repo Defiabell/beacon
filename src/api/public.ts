@@ -129,6 +129,15 @@ export interface ReferredTraffic {
   // This channel shares its publication host with another channel, so the
   // numbers describe the host, not this channel alone.
   sharedHost: boolean;
+  // The linked post predates our first referrer snapshot for this repo, so a
+  // zero reading here means "we were not watching", not "referred nobody".
+  // GitHub only ever serves a 14-day referrer window, so traffic older than
+  // our earliest capture has already decayed out of it and can never be
+  // recovered. nightide's V2EX post (2026-07-27) sits before beacon's first
+  // snapshot (2026-08-09) and was being reported as a flat 引流 0 — the exact
+  // "no data read as zero" mistake this whole type exists to prevent, which
+  // the first version of it committed anyway.
+  predatesCoverage: boolean;
 }
 
 export interface MatrixCoverageRow {
@@ -348,15 +357,27 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
 // Exported for direct unit testing: the whole point is which of three outcomes
 // you get — undefined (unobservable), zeroes (observable, referred nobody), or
 // real numbers — and routing that through D1 would obscure it.
-export function referredTrafficFor(channel: Channel, peaks: PeakReferrer[]): ReferredTraffic | undefined {
+export function referredTrafficFor(
+  channel: Channel,
+  peaks: PeakReferrer[],
+  postedAt: string | null = null
+): ReferredTraffic | undefined {
   if (channel.referrerHosts.length === 0) return undefined;
   const hits = peaks.filter(p => referrerMatchesChannel(p.referrer, channel));
+  // Earliest capture for the whole repo, not just the matched hosts — the
+  // question is when beacon started watching this repo at all, and a channel
+  // with no hits has no firstSeen of its own to answer it with.
+  const coverageStart = peaks.length ? peaks.map(p => p.firstSeen).sort()[0] : null;
   return {
     views: hits.reduce((n, h) => n + h.views, 0),
     uniques: hits.reduce((n, h) => n + h.uniques, 0),
     firstSeen: hits.length ? hits.map(h => h.firstSeen).sort()[0] : null,
     lastSeen: hits.length ? hits.map(h => h.lastSeen).sort().slice(-1)[0] : null,
-    sharedHost: channelHasSharedReferrerHost(channel)
+    sharedHost: channelHasSharedReferrerHost(channel),
+    // No coverage at all is also "not watching". An unlinked cell (postedAt
+    // null) makes no claim about when it was posted, so it can't be shown to
+    // predate anything and stays false.
+    predatesCoverage: postedAt !== null && (coverageStart === null || postedAt < coverageStart)
   };
 }
 
@@ -377,14 +398,20 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
   const peaksByProject = new Map<string, PeakReferrer[]>();
   for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
 
+  // Post publish dates, needed to tell "referred nobody" from "posted before we
+  // started watching" (see ReferredTraffic.predatesCoverage).
+  const postedAtById = new Map<number, string | null>();
+  for (const post of await listPosts(db)) if (post.id != null) postedAtById.set(post.id, post.publishedAt);
+
   const richCoverage: MatrixCoverageRow[] = coverage.map(c => {
     const raw = rawCoverage.find(r => r.project === c.project && r.channelId === c.channelId);
     const impact = raw?.postId != null ? impactByPostId.get(raw.postId) : undefined;
     const channel = CHANNELS.find(ch => ch.id === c.channelId);
+    const postedAt = raw?.postId != null ? postedAtById.get(raw.postId) ?? null : null;
     return {
       ...c,
       effect: impact ? toMatrixEffect(impact) : undefined,
-      referred: channel ? referredTrafficFor(channel, peaksByProject.get(c.project) ?? []) : undefined
+      referred: channel ? referredTrafficFor(channel, peaksByProject.get(c.project) ?? [], postedAt) : undefined
     };
   });
 
