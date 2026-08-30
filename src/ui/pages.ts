@@ -7,7 +7,7 @@
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SurfaceBreakdown } from "../api/public";
+import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SurfaceBreakdown, WorkerTotal } from "../api/public";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, ImpactWindow } from "../impact/attribute";
@@ -17,7 +17,7 @@ import { page, svgSparkline, esc, type SparkMarker } from "./layout";
 type NavKey = "overview" | "matrix" | "todos" | "posts" | "impact" | null;
 
 const SOURCE_LABELS: Record<string, string> = { audit: "体检", matrix: "矩阵", manual: "手动" };
-const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", audit: "体检" };
+const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", cloudflare: "Cloudflare", audit: "体检" };
 const PLATFORM_LABELS: Record<Platform, string> = { v2ex: "V2EX", linuxdo: "LinuxDO", hn: "HN", reddit: "Reddit", github: "GitHub" };
 const CHECK_LABELS: Record<string, string> = {
   description: "description ≥ 20 字符",
@@ -219,6 +219,40 @@ ${unknown}
 </section>`;
 }
 
+// Worker request counts. Separate from the surfaces section above because it
+// answers a different question: surfaces say where people came FROM, this says
+// which of our own things they actually hit.
+//
+// The unit is REQUESTS and the heading says so. One first-time load of the
+// shotsync demo was measured at 14 requests (document + /api/list + manifest +
+// favicon + 10 thumbnails), so a visit estimate is shown only for that one
+// script, only with its measured divisor, and only hedged — for every other
+// script the divisor is unknown and no estimate is offered at all.
+const MEASURED_REQUESTS_PER_VISIT: Record<string, number> = { "shotsync-demo": 14 };
+
+function workersSection(workers: WorkerTotal[]): string {
+  if (workers.length === 0) {
+    return `<section class="actions"><h2>自有服务请求量</h2>
+<p class="sub">暂无数据。Cloudflare 采集尚未运行或未配置（需要 CLOUDFLARE_ACCOUNT_ID 与 CLOUDFLARE_API_TOKEN）。</p></section>`;
+  }
+  const days = Math.max(...workers.map(w => w.days));
+  const rows = workers
+    .map(w => {
+      const divisor = MEASURED_REQUESTS_PER_VISIT[w.script];
+      const est = divisor
+        ? `<span class="src" title="按实测每次首屏访问 ${divisor} 个请求粗算；回访命中缓存会更少，点开大图会更多，且请求数不区分爬虫">约 ${Math.round(w.requests / divisor)} 次访问</span>`
+        : "";
+      const err = w.errors > 0 ? `<span class="src">错误 ${w.errors}</span>` : "";
+      return `<li><span class="proj">${esc(w.script)}</span>${est}${err}<span class="effect">${w.requests}</span></li>`;
+    })
+    .join("");
+  return `<section class="actions">
+<h2>自有服务请求量</h2>
+<p class="sub">近 ${days} 天 Cloudflare Worker 的<strong>请求数</strong>——不是访问数，一次首屏访问会打多个请求。只有实测过换算比的脚本才给访问估算。</p>
+<ul class="plain">${rows}</ul>
+</section>`;
+}
+
 export function renderOverview(o: Overview, authed: boolean): string {
   const actions = actionItems(o).map(renderActionItem).join("") || `<li>暂无待办建议</li>`;
   const cards = o.projects.map(projectCard).join("") || `<p class="sub">暂无项目</p>`;
@@ -232,6 +266,7 @@ ${freshnessBar(o.sources)}
 </section>
 <div class="grid">${cards}</div>
 ${surfacesSection(o.surfaces)}
+${workersSection(o.workers)}
 </main>`;
   return page("beacon · 总览", body);
 }

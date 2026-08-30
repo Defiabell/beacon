@@ -4,6 +4,11 @@ export interface Env {
   ADMIN_TOKEN: string;
   GOATCOUNTER_SITE?: string;   // GoatCounter site code，如 "defiabell"
   GOATCOUNTER_TOKEN?: string;
+  // Cloudflare GraphQL analytics — reads this account's own Worker request
+  // counts. Optional: absent means the collector reports "not configured"
+  // rather than failing, same contract as the GoatCounter pair above.
+  CLOUDFLARE_ACCOUNT_ID?: string;
+  CLOUDFLARE_API_TOKEN?: string;
 }
 export type Platform = "v2ex" | "linuxdo" | "hn" | "reddit" | "github";
 export interface RepoDaily { repo: string; date: string; views: number; uniqueViews: number; clones: number; uniqueClones: number; stars: number; forks: number; }

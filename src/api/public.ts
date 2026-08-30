@@ -18,6 +18,7 @@ import {
   getAllRepoDaily,
   getLatestReferrers,
   getPeakReferrers,
+  getWorkerTotals,
   listPosts,
   listPostsForImpact,
   latestPostMetrics,
@@ -47,6 +48,7 @@ const SITE_PV_WINDOW_DAYS = 7;
 const STAR_DELTA_WINDOW_DAYS = 7;
 const TOP_TODOS_LIMIT = 5;
 const TOP_REFERRERS_LIMIT = 5;
+const WORKER_WINDOW_DAYS = 7;
 
 export interface ProjectSummary {
   project: string;
@@ -66,6 +68,19 @@ export interface ProjectSummary {
   topReferrers: ReferrerRow[];
 }
 
+// Trailing-window request counts for this account's Workers.
+//
+// REQUESTS, not visits — see src/collect/cloudflare.ts for why the two differ
+// by more than an order of magnitude. The UI must never relabel this as
+// traffic; where a visit estimate is shown it carries its own divisor and the
+// word "约".
+export interface WorkerTotal {
+  script: string;
+  requests: number;
+  errors: number;
+  days: number;
+}
+
 export interface Overview {
   projects: ProjectSummary[];
   topTodos: Todo[];
@@ -73,6 +88,7 @@ export interface Overview {
   sources: SourceRun[];
   sitePv7d: number;
   surfaces: SurfaceBreakdown;
+  workers: WorkerTotal[];
 }
 
 export interface PostWithMetrics {
@@ -321,7 +337,8 @@ export async function buildOverview(env: Env): Promise<Overview> {
   const peaksByProject = new Map<string, PeakReferrer[]>();
   for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
 
-  return { projects, topTodos, suggestions, sources, sitePv7d, surfaces: buildSurfaceBreakdown(peaksByProject) };
+  const workers = await getWorkerTotals(db, WORKER_WINDOW_DAYS);
+  return { projects, topTodos, suggestions, sources, sitePv7d, surfaces: buildSurfaceBreakdown(peaksByProject), workers };
 }
 
 // Returns null when `name` doesn't match a configured project (caller maps

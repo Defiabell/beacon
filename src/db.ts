@@ -1,3 +1,4 @@
+import type { WorkerDaily } from "./collect/cloudflare";
 import type {
   RepoDaily,
   ReferrerRow,
@@ -191,6 +192,38 @@ export async function upsertSiteDaily(db: D1Database, rows: SiteDaily[]): Promis
        pageviews=excluded.pageviews, visitors=excluded.visitors`
   );
   await db.batch(rows.map(r => stmt.bind(r.site, r.date, r.pageviews, r.visitors)));
+}
+
+// Cloudflare's analytics API restates the last few days as data settles, so
+// this upserts rather than inserts — a re-collected day overwrites in place.
+export async function upsertWorkerDaily(db: D1Database, rows: WorkerDaily[]): Promise<void> {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT INTO worker_daily (script, date, requests, errors, subrequests)
+     VALUES (?1,?2,?3,?4,?5)
+     ON CONFLICT (script, date) DO UPDATE SET
+       requests=excluded.requests, errors=excluded.errors, subrequests=excluded.subrequests`
+  );
+  await db.batch(rows.map(r => stmt.bind(r.script, r.date, r.requests, r.errors, r.subrequests)));
+}
+
+// Per-script totals over the trailing `days` window, busiest first. `days` is
+// applied against the newest date present rather than today's date, so the
+// window does not silently shrink to nothing when a collection run is missed.
+export async function getWorkerTotals(
+  db: D1Database,
+  days: number
+): Promise<{ script: string; requests: number; errors: number; days: number }[]> {
+  const res = await db
+    .prepare(
+      `SELECT script, SUM(requests) AS requests, SUM(errors) AS errors, COUNT(*) AS days
+       FROM worker_daily
+       WHERE date > date((SELECT MAX(date) FROM worker_daily), '-' || ?1 || ' days')
+       GROUP BY script ORDER BY requests DESC`
+    )
+    .bind(days)
+    .all<{ script: string; requests: number; errors: number; days: number }>();
+  return res.results;
 }
 
 // audit_results only ever holds the latest run's row per (project, check_id) —

@@ -106,7 +106,7 @@ describe("renderOverview", () => {
       topTodos: [{ id: 1, project: "nightide", source: "audit", title: "fix readme link", priority: 1, status: "open" }],
       suggestions: [{ project: "shotsync", channelId: "v2ex", channelName: "V2EX", score: 3 }],
       sources: [{ source: "github", lastRunAt: "2026-08-01T01:00:00Z", ok: true, error: null }],
-      sitePv7d: 100, surfaces: NO_SURFACES
+      sitePv7d: 100, surfaces: NO_SURFACES, workers: []
     };
     const html = renderOverview(overview, false);
     expect(html).toContain("本周建议行动");
@@ -124,7 +124,7 @@ describe("renderOverview", () => {
       topTodos: [],
       suggestions: [{ project: "shotsync", channelId: "show-hn", channelName: "Show HN", score: 4 }],
       sources: [],
-      sitePv7d: 0, surfaces: NO_SURFACES
+      sitePv7d: 0, surfaces: NO_SURFACES, workers: []
     };
     const html = renderOverview(overview, false);
     // Matched as the whole rendered element rather than as two document-wide
@@ -142,7 +142,7 @@ describe("renderOverview", () => {
       topTodos: [{ id: 1, project: "nightide", source: "manual", title: "<script>alert(1)</script>", priority: 1, status: "open" }],
       suggestions: [],
       sources: [],
-      sitePv7d: 0, surfaces: NO_SURFACES
+      sitePv7d: 0, surfaces: NO_SURFACES, workers: []
     };
     const html = renderOverview(overview, false);
     expect(html).not.toContain("<script>alert(1)</script>");
@@ -150,7 +150,7 @@ describe("renderOverview", () => {
   });
 
   it("doesn't crash on an all-empty Overview", () => {
-    const overview: Overview = { projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES };
+    const overview: Overview = { projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES, workers: [] };
     expect(() => renderOverview(overview, false)).not.toThrow();
   });
 
@@ -164,7 +164,7 @@ describe("renderOverview", () => {
         topTodos: [],
         suggestions: [],
         sources: [],
-        sitePv7d: 0, surfaces: NO_SURFACES
+        sitePv7d: 0, surfaces: NO_SURFACES, workers: []
       };
       const html = renderOverview(overview, false);
       expect(html).toContain("clones 14d 2");
@@ -178,7 +178,7 @@ describe("renderOverview", () => {
         topTodos: [],
         suggestions: [],
         sources: [],
-        sitePv7d: 0, surfaces: NO_SURFACES
+        sitePv7d: 0, surfaces: NO_SURFACES, workers: []
       };
       const html = renderOverview(overview, false);
       expect(html).not.toContain("机器");
@@ -900,13 +900,13 @@ describe("renderImpact", () => {
 
 describe("header login/logout link (navHeader)", () => {
   it("renderOverview shows a 登录 link when logged out", () => {
-    const html = renderOverview({ projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES }, false);
+    const html = renderOverview({ projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES, workers: [] }, false);
     expect(html).toContain('<a href="/login">登录</a>');
     expect(html).not.toContain("登出");
   });
 
   it("renderOverview shows a 登出 form (not a link) when logged in", () => {
-    const html = renderOverview({ projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES }, true);
+    const html = renderOverview({ projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES, workers: [] }, true);
     expect(html).toContain('<form method="post" action="/logout"');
     expect(html).toContain("登出");
     expect(html).not.toContain('href="/login"');
