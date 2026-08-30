@@ -34,7 +34,7 @@ const stub: typeof fetch = async input => {
 };
 
 describe("runDailyCollect", () => {
-  it("runs all 5 sources with per-source isolation", async () => {
+  it("runs all 6 sources with per-source isolation", async () => {
     await db.insertPost(env.DB, {
       url: FAILING_POST_URL,
       platform: "v2ex",
@@ -52,7 +52,7 @@ describe("runDailyCollect", () => {
 
     const reports = await runDailyCollect(env, new Date("2026-08-01T00:00:00Z"), stub);
 
-    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts"]);
+    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts", "rum"]);
 
     const github = reports.find(r => r.source === "github")!;
     expect(github.ok).toBe(true);
@@ -72,6 +72,10 @@ describe("runDailyCollect", () => {
     const cloudflare = reports.find(r => r.source === "cloudflare")!;
     expect(cloudflare.ok).toBe(true);
     expect(cloudflare.error).toBe("not configured");
+
+    const rum = reports.find(r => r.source === "rum")!;
+    expect(rum.ok).toBe(true);
+    expect(rum.error).toBe("not configured");
 
     const audit = reports.find(r => r.source === "audit")!;
     expect(audit.ok).toBe(true);
@@ -99,9 +103,9 @@ describe("runDailyCollect", () => {
     expect(urls).toContain(OK_POST_URL);
     expect(urls).not.toContain(FAILING_POST_URL);
 
-    // all 5 sources recorded in source_runs
+    // all 6 sources recorded in source_runs
     const sourceRuns = await db.listSourceRuns(env.DB);
-    expect(sourceRuns.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts"]);
+    expect(sourceRuns.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts", "rum"]);
     const postsRun = sourceRuns.find(r => r.source === "posts")!;
     expect(postsRun.ok).toBe(false);
     expect(postsRun.error).toContain(FAILING_POST_URL);

@@ -19,6 +19,7 @@ import {
   getLatestReferrers,
   getPeakReferrers,
   getWorkerTotals,
+  getSiteTotals,
   listPosts,
   listPostsForImpact,
   latestPostMetrics,
@@ -29,7 +30,8 @@ import {
   getSitePvSum,
   listAuditResults,
   type PostForImpact,
-  type PeakReferrer
+  type PeakReferrer,
+  type SiteTotal
 } from "../db";
 import {
   shiftDate,
@@ -89,6 +91,7 @@ export interface Overview {
   sitePv7d: number;
   surfaces: SurfaceBreakdown;
   workers: WorkerTotal[];
+  sites: SiteTotal[];
 }
 
 export interface PostWithMetrics {
@@ -338,7 +341,17 @@ export async function buildOverview(env: Env): Promise<Overview> {
   for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
 
   const workers = await getWorkerTotals(db, WORKER_WINDOW_DAYS);
-  return { projects, topTodos, suggestions, sources, sitePv7d, surfaces: buildSurfaceBreakdown(peaksByProject), workers };
+  const sites = await getSiteTotals(db, SITE_PV_WINDOW_DAYS);
+  return {
+    projects,
+    topTodos,
+    suggestions,
+    sources,
+    sitePv7d,
+    surfaces: buildSurfaceBreakdown(peaksByProject),
+    workers,
+    sites
+  };
 }
 
 // Returns null when `name` doesn't match a configured project (caller maps

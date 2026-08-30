@@ -169,7 +169,7 @@ export default {
     // "cloudflare" joins the cheap group: it is a single GraphQL POST, so it
     // costs one subrequest against that invocation's budget.
     const sources: SourceName[] =
-      event.cron === AUDIT_ONLY_CRON ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare"];
+      event.cron === AUDIT_ONLY_CRON ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare", "rum"];
     ctx.waitUntil(runDailyCollect(env, new Date(event.scheduledTime), undefined, sources).then(() => undefined));
   }
 } satisfies ExportedHandler<Env>;

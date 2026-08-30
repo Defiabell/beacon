@@ -4,6 +4,7 @@ import { fetchRepoTraffic } from "./github";
 import { fetchPostMetrics } from "./posts";
 import { fetchSiteDaily } from "./goatcounter";
 import { fetchWorkerDaily } from "./cloudflare";
+import { fetchRumDaily } from "./rum";
 import { runAudit } from "../audit/run";
 import { CONFIG } from "../config";
 import {
@@ -23,8 +24,8 @@ export interface CollectorReport {
   error?: string;
 }
 
-export type SourceName = "github" | "posts" | "goatcounter" | "cloudflare" | "audit";
-export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "cloudflare", "audit"];
+export type SourceName = "github" | "posts" | "goatcounter" | "cloudflare" | "rum" | "audit";
+export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "cloudflare", "rum", "audit"];
 
 interface SourceResult {
   ok: boolean;
@@ -114,6 +115,29 @@ async function collectCloudflare(env: Env, date: string, fetchFn: FetchFn): Prom
   return { ok: true };
 }
 
+async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {
+  if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+    return { ok: true, error: "not configured" };
+  }
+  if (CONFIG.sites.length === 0) return { ok: true, error: "no sites configured" };
+  // Same 3-day re-fetch window as the Worker collector: Cloudflare restates
+  // recent days, and re-reading them lets the upsert correct earlier
+  // undercounts and self-heal a missed run. All sites ride one aliased query,
+  // so the whole fleet costs a single subrequest.
+  const start = new Date(`${date}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - 2);
+  const rows = await fetchRumDaily(
+    CONFIG.sites,
+    env.CLOUDFLARE_ACCOUNT_ID,
+    env.CLOUDFLARE_API_TOKEN,
+    start.toISOString().slice(0, 10),
+    date,
+    fetchFn
+  );
+  await upsertSiteDaily(env.DB, rows);
+  return { ok: true };
+}
+
 async function collectAudit(env: Env, fetchFn: FetchFn): Promise<SourceResult> {
   await runAudit(env, fetchFn);
   return { ok: true };
@@ -142,6 +166,7 @@ export async function runDailyCollect(
   if (sources.includes("cloudflare")) {
     reports.push(await runSource(env.DB, "cloudflare", () => collectCloudflare(env, date, fetchFn)));
   }
+  if (sources.includes("rum")) reports.push(await runSource(env.DB, "rum", () => collectRum(env, date, fetchFn)));
   if (sources.includes("audit")) reports.push(await runSource(env.DB, "audit", () => collectAudit(env, fetchFn)));
   return reports;
 }

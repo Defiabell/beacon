@@ -395,7 +395,7 @@ describe("POST /api/admin/collect", () => {
     const res = await handleAdmin(req("POST", "/api/admin/collect"), env, "/api/admin/collect", alwaysNotFound);
     expect(res.status).toBe(200);
     const reports = await res.json<{ source: string; ok: boolean }[]>();
-    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts"]);
+    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts", "rum"]);
   });
 
   // C1: ?sources= lets a manual collect stay under the free-tier

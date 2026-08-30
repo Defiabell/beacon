@@ -226,6 +226,32 @@ export async function getWorkerTotals(
   return res.results;
 }
 
+export interface SiteTotal {
+  site: string;
+  pageviews: number;
+  visitors: number;
+  days: number;
+  lastDate: string;
+}
+
+// Per-site totals over the trailing `days` window, busiest first. Like
+// getWorkerTotals, the window is measured from the newest row present rather
+// than from today, so a missed collection run shrinks the sample instead of
+// silently reporting zero.
+export async function getSiteTotals(db: D1Database, days: number): Promise<SiteTotal[]> {
+  const res = await db
+    .prepare(
+      `SELECT site, SUM(pageviews) AS pageviews, SUM(visitors) AS visitors,
+              COUNT(*) AS days, MAX(date) AS lastDate
+       FROM site_daily
+       WHERE date > date((SELECT MAX(date) FROM site_daily), '-' || ?1 || ' days')
+       GROUP BY site ORDER BY pageviews DESC`
+    )
+    .bind(days)
+    .all<SiteTotal>();
+  return res.results;
+}
+
 // audit_results only ever holds the latest run's row per (project, check_id) —
 // upsertAuditResults overwrites in place — so this is inherently "current state",
 // not history. Ordered priority asc then check_id asc for a stable, deterministic

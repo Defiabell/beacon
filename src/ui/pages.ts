@@ -8,6 +8,7 @@
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
 import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SurfaceBreakdown, WorkerTotal } from "../api/public";
+import type { SiteTotal } from "../db";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, ImpactWindow } from "../impact/attribute";
@@ -219,6 +220,37 @@ ${unknown}
 </section>`;
 }
 
+// 网站访问量 — Cloudflare Web Analytics 的每日 pageload 汇总。
+//
+// 和上面「自有服务请求量」的区别：那个是 Worker 收到的 HTTP 请求数（一次访问
+// 会打多个），这个是真实的页面加载次数，单位就是人看了几个页面，不需要换算。
+//
+// 一个条目对应一个 hostname，这是 Web Analytics 划分站点的方式 ——
+// defiabell.github.io 一行同时包含博客和 /nightide/ 下的游戏。
+function sitesSection(sites: SiteTotal[]): string {
+  if (sites.length === 0) {
+    return `<section class="actions"><h2>网站访问量</h2>
+<p class="sub">暂无数据。Cloudflare Web Analytics 采集尚未运行，或站点刚接入还没攒够一天。</p></section>`;
+  }
+  const days = Math.max(...sites.map(s => s.days));
+  const rows = sites
+    .map(s => {
+      const cfg = CONFIG.sites.find(c => c.host === s.site);
+      const label = cfg ? `${cfg.name}` : s.site;
+      return (
+        `<li><span class="proj" title="${esc(s.site)}">${esc(label)}</span>` +
+        `<span class="src">${esc(s.site)}</span>` +
+        `<span class="effect">${s.pageviews} 次浏览 / ${s.visitors} 次访问</span></li>`
+      );
+    })
+    .join("");
+  return `<section class="actions">
+<h2>网站访问量</h2>
+<p class="sub">近 ${days} 天，来自 Cloudflare Web Analytics。「浏览」是页面加载次数，「访问」是会话数——都不是独立访客数。一行一个域名，defiabell.github.io 含博客与 /nightide/ 游戏。</p>
+<ul class="plain">${rows}</ul>
+</section>`;
+}
+
 // Worker request counts. Separate from the surfaces section above because it
 // answers a different question: surfaces say where people came FROM, this says
 // which of our own things they actually hit.
@@ -265,6 +297,7 @@ ${freshnessBar(o.sources)}
 <ol class="todo">${actions}</ol>
 </section>
 <div class="grid">${cards}</div>
+${sitesSection(o.sites)}
 ${surfacesSection(o.surfaces)}
 ${workersSection(o.workers)}
 </main>`;
