@@ -1,4 +1,5 @@
 import { runDailyCollect } from "./collect/run";
+import { AUDIT_CRONS } from "./schedule";
 import type { SourceName } from "./collect/run";
 import type { Env } from "./types";
 import { handleAdmin } from "./api/admin";
@@ -88,11 +89,10 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
   return null;
 }
 
-// Cron trigger for the split-off audit invocation (see wrangler.toml). Any
-// other scheduled invocation (currently just "0 1 * * *") runs the cheap
-// three; this keeps each invocation's subrequest count under the free-tier
-// 50-per-invocation cap (see src/audit/run.ts's MAX_LINKS_CHECKED comment).
-const AUDIT_ONLY_CRON = "30 1 * * *";
+// Scheduled routing lives in src/schedule.ts: the audit is split across
+// AUDIT_CRONS (one shard per cron) and everything else runs in the single cheap
+// invocation. The split exists to keep each invocation under the free tier's
+// 50-subrequests-per-invocation cap; see src/audit/run.ts auditShards.
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -168,8 +168,15 @@ export default {
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
     // "cloudflare" joins the cheap group: it is a single GraphQL POST, so it
     // costs one subrequest against that invocation's budget.
+    // An audit cron identifies itself by position in AUDIT_CRONS, which is also
+    // its shard index; -1 means this is the cheap-sources invocation.
+    const auditShard = AUDIT_CRONS.indexOf(event.cron);
     const sources: SourceName[] =
-      event.cron === AUDIT_ONLY_CRON ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare", "rum"];
-    ctx.waitUntil(runDailyCollect(env, new Date(event.scheduledTime), undefined, sources).then(() => undefined));
+      auditShard >= 0 ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare", "rum"];
+    ctx.waitUntil(
+      runDailyCollect(env, new Date(event.scheduledTime), undefined, sources, Math.max(auditShard, 0)).then(
+        () => undefined
+      )
+    );
   }
 } satisfies ExportedHandler<Env>;

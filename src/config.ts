@@ -17,7 +17,9 @@ export const CONFIG: BeaconConfig = {
     { name: "day-monitor", repo: "Defiabell/day-monitor", tags: ["macos", "tool", "ai", "en"], homepage: "https://defiabell.github.io/day-monitor/" },
     { name: "shotsync", repo: "Defiabell/shotsync", tags: ["selfhosted", "tool", "web", "en"], homepage: "https://shotsync-demo.defiabell.workers.dev" },
     { name: "screen-coach", repo: "Defiabell/screen-coach", tags: ["macos", "tool", "ai", "zh"], homepage: "https://screen-coach-trial.defiabell.workers.dev" },
-    { name: "shiling", repo: "Defiabell/shiling", tags: ["game", "web", "zh"], homepage: "https://shiling.pages.dev" }
+    { name: "shiling", repo: "Defiabell/shiling", tags: ["game", "web", "zh"], homepage: "https://shiling.pages.dev" },
+    { name: "yixi", repo: "Defiabell/yixi", tags: ["selfhosted", "tool", "web", "en"], homepage: "https://yixi-app.pages.dev" },
+    { name: "geshuo", repo: "Defiabell/geshuo", tags: ["web", "zh", "ai"], homepage: "https://geshuo.pages.dev" }
   ],
   // siteTag (not site_token) — the internal id RUM's GraphQL filters on.
   sites: [

@@ -3,6 +3,7 @@ import type { FetchFn } from "../collect/github";
 import { backfillStarHistory } from "../collect/github";
 import { detectPlatform, fetchPostMetrics } from "../collect/posts";
 import { runDailyCollect, ALL_SOURCES } from "../collect/run";
+import { auditShards } from "../audit/run";
 import type { SourceName } from "../collect/run";
 import { CONFIG } from "../config";
 import { requireAdmin } from "../auth";
@@ -184,11 +185,27 @@ function parseSourcesParam(url: URL): SourceName[] | { error: string } {
   return names as SourceName[];
 }
 
+// `?shard=N` picks which audit shard to run. It defaults to 0 rather than
+// "all", because "all" cannot fit in one invocation — that is the entire reason
+// shards exist. The response therefore always reports `auditShards`, so a
+// caller running the audit by hand knows how many times to call this and with
+// which indices instead of assuming one call covered the fleet.
+function parseShardParam(url: URL): number | { error: string } {
+  const raw = url.searchParams.get("shard");
+  if (raw === null) return 0;
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 0) return { error: `shard must be a non-negative integer, got: ${raw}` };
+  return n;
+}
+
 async function handleCollect(req: Request, env: Env, fetchFn: FetchFn): Promise<Response> {
-  const sources = parseSourcesParam(new URL(req.url));
+  const url = new URL(req.url);
+  const sources = parseSourcesParam(url);
   if (!Array.isArray(sources)) return jsonResponse(sources, 400);
-  const reports = await runDailyCollect(env, new Date(), fetchFn, sources);
-  return jsonResponse(reports, 200);
+  const shard = parseShardParam(url);
+  if (typeof shard !== "number") return jsonResponse(shard, 400);
+  const reports = await runDailyCollect(env, new Date(), fetchFn, sources, shard);
+  return jsonResponse({ reports, auditShards: auditShards(CONFIG.projects).length, ranShard: shard }, 200);
 }
 
 // Per-repo isolation mirrors collectGithub (src/collect/run.ts): one repo's

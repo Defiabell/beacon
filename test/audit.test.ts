@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
 import { runRepoChecks, todoTitle, type RepoAuditInput } from "../src/audit/checks";
-import { collectAuditInput, runAudit, auditWorstCaseSubrequests, SUBREQUEST_CAP } from "../src/audit/run";
+import { AUDIT_CRONS } from "../src/schedule";
+import { collectAuditInput, runAudit, auditWorstCaseSubrequests, SUBREQUEST_CAP, auditShards} from "../src/audit/run";
 import * as db from "../src/db";
 import { CONFIG } from "../src/config";
 import repoMeta from "./fixtures/gh-repo.json";
@@ -398,7 +399,12 @@ describe("collectAuditInput", () => {
 
 describe("runAudit", () => {
   it("lands audit_results for every configured project and creates todos for fail checks", async () => {
-    await runAudit(env, buildStub());
+    // One call audits one shard, so run them all — which is exactly what the
+    // crons do daily. This doubles as the coverage assertion below: if the
+    // shards did not partition the fleet, some project would have no rows.
+    for (let i = 0; i < auditShards(CONFIG.projects).length; i++) {
+      await runAudit(env, buildStub(), i);
+    }
 
     const rows = await env.DB.prepare(
       "select check_id as checkId, status, detail from audit_results where project=?1"
@@ -522,7 +528,19 @@ describe("runAudit", () => {
       return base(input, init);
     };
 
-    await expect(runAudit(env, oneBadProject)).rejects.toThrow(new RegExp(failingProject.repo));
+    // Run every shard, as the crons do. Only the shard holding the failing
+    // project should throw; the rest must complete normally.
+    const shards = auditShards(CONFIG.projects);
+    let threw = 0;
+    for (let i = 0; i < shards.length; i++) {
+      try {
+        await runAudit(env, oneBadProject, i);
+      } catch (e) {
+        threw++;
+        expect(String(e)).toMatch(new RegExp(failingProject.repo));
+      }
+    }
+    expect(threw).toBe(1);
 
     // the failing project has no audit_results row...
     const failingCount = await env.DB.prepare("select count(*) as n from audit_results where project=?1")
@@ -603,13 +621,38 @@ describe("audit subrequest budget", () => {
   // audit source recording ok:false in production — days later, if anyone
   // looks. This test is what makes adding the fleet's next project fail here
   // instead of there.
-  it("the configured fleet's worst-case audit run stays under the free-tier cap", () => {
-    const worst = auditWorstCaseSubrequests(CONFIG.projects);
+  // The whole fleet no longer has to fit one invocation — that is what sharding
+  // bought. What must still hold is that every individual shard fits, and that
+  // there is a cron to run each one.
+  it("every audit shard fits inside one invocation's subrequest budget", () => {
+    const shards = auditShards(CONFIG.projects);
+    shards.forEach((shard, i) => {
+      const worst = auditWorstCaseSubrequests(shard);
+      expect(
+        worst,
+        `shard ${i} (${shard.map(p => p.name).join(", ")}) costs ${worst} subrequests, cap is ${SUBREQUEST_CAP}`
+      ).toBeLessThanOrEqual(SUBREQUEST_CAP);
+    });
+  });
+
+  it("has a cron configured for every shard, so no project goes un-audited", () => {
+    const shards = auditShards(CONFIG.projects);
     expect(
-      worst,
-      `worst case is ${worst} subrequests for ${CONFIG.projects.length} projects, cap is ${SUBREQUEST_CAP}. ` +
-        `Shard the audit across more cron invocations (wrangler.toml) rather than shrinking MAX_LINKS_CHECKED.`
-    ).toBeLessThanOrEqual(SUBREQUEST_CAP);
+      shards.length,
+      `the fleet needs ${shards.length} audit shards but src/schedule.ts lists ${AUDIT_CRONS.length} cron(s). ` +
+        `Add one to BOTH src/schedule.ts and wrangler.toml, or the tail of the fleet is never checked.`
+    ).toBeLessThanOrEqual(AUDIT_CRONS.length);
+  });
+
+  it("shards partition the fleet: every project appears exactly once", () => {
+    const flat = auditShards(CONFIG.projects).flat().map(p => p.name);
+    expect(flat.sort()).toEqual(CONFIG.projects.map(p => p.name).sort());
+    expect(new Set(flat).size).toBe(flat.length);
+  });
+
+  it("refuses to drop a project that cannot fit a shard on its own", () => {
+    // Greedy packing would silently leave such a project out of every shard.
+    expect(() => auditShards(CONFIG.projects, 1)).toThrow(/over the 1 cap/);
   });
 });
 
@@ -676,13 +719,18 @@ describe("audit subrequest budget: formula vs. reality", () => {
       return new Response("gone", { status: 404 });
     };
 
-    await runAudit(env, counting);
-
-    // Equality, not <=: an over-estimate would silently waste headroom the
-    // moment the fleet grows, and an under-estimate is the dangerous one. Both
-    // are drift, and both should show up here.
-    expect(calls).toBe(auditWorstCaseSubrequests(CONFIG.projects));
-    expect(calls).toBeLessThanOrEqual(SUBREQUEST_CAP);
+    // Checked per shard, because a shard is what one invocation actually runs
+    // and therefore what the 50-subrequest cap applies to.
+    const shards = auditShards(CONFIG.projects);
+    for (let i = 0; i < shards.length; i++) {
+      calls = 0;
+      await runAudit(env, counting, i);
+      // Equality, not <=: an over-estimate would silently waste headroom the
+      // moment the fleet grows, and an under-estimate is the dangerous one.
+      // Both are drift, and both should show up here.
+      expect(calls, `shard ${i}`).toBe(auditWorstCaseSubrequests(shards[i]));
+      expect(calls, `shard ${i}`).toBeLessThanOrEqual(SUBREQUEST_CAP);
+    }
   });
 });
 

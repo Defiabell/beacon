@@ -3,6 +3,7 @@ import type { ProjectConfig } from "../config";
 import type { FetchFn } from "../collect/github";
 import { ghHeaders } from "../collect/github";
 import { CONFIG } from "../config";
+import { AUDIT_CRONS } from "../schedule";
 import { upsertAuditResults, insertTodoIfNew, reopenTodoByTitle, closeTodoByTitle } from "../db";
 import type { RepoAuditInput } from "./checks";
 import { runRepoChecks, todoTitle } from "./checks";
@@ -44,10 +45,47 @@ export const SUBREQUEST_CAP = 50;
 // invocations (wrangler.toml), not to keep shaving MAX_LINKS_CHECKED — see
 // https://github.com/Defiabell/beacon/issues/12.
 export function auditWorstCaseSubrequests(projects: ProjectConfig[]): number {
-  return projects.reduce(
-    (sum, p) => sum + AUDIT_BASE_FETCHES + (p.tags.includes("macos") ? 1 : 0) + MAX_LINKS_CHECKED * 2,
-    0
-  );
+  return projects.reduce((sum, p) => sum + projectAuditCost(p), 0);
+}
+
+// Worst-case subrequests for auditing one repo on its own.
+export function projectAuditCost(p: ProjectConfig): number {
+  return AUDIT_BASE_FETCHES + (p.tags.includes("macos") ? 1 : 0) + MAX_LINKS_CHECKED * 2;
+}
+
+// Splits the fleet into contiguous groups, each of which fits inside one
+// invocation's subrequest budget. Every shard runs every day (one cron each,
+// minutes apart), so sharding costs nothing in freshness — a project is still
+// re-checked daily. What it buys is that adding the 7th project stops meaning
+// "the audit silently starts failing in production".
+//
+// Contiguous and greedy, therefore deterministic: the same CONFIG always
+// produces the same split, so a run cannot audit one project twice while
+// skipping another.
+export function auditShards(
+  projects: ProjectConfig[],
+  cap: number = SUBREQUEST_CAP
+): ProjectConfig[][] {
+  const shards: ProjectConfig[][] = [];
+  let current: ProjectConfig[] = [];
+  let cost = 0;
+  for (const p of projects) {
+    const c = projectAuditCost(p);
+    // A single repo that cannot fit alone would be dropped by the greedy loop
+    // below and never audited. That is impossible with today's constants, so
+    // it is a programming error rather than a runtime condition — say so
+    // instead of silently returning a fleet with a hole in it.
+    if (c > cap) throw new Error(`project ${p.name} alone costs ${c} subrequests, over the ${cap} cap`);
+    if (cost + c > cap) {
+      shards.push(current);
+      current = [];
+      cost = 0;
+    }
+    current.push(p);
+    cost += c;
+  }
+  if (current.length > 0) shards.push(current);
+  return shards;
 }
 const SOCIAL_PREVIEW_URL = (repo: string) => `https://github.com/${repo}`;
 
@@ -298,10 +336,27 @@ export async function collectAuditInput(
 // this function's signature is void, an overall failure surfaces by throwing
 // an aggregated error after the loop — the orchestrator's per-source try/catch
 // (runSource in src/collect/run.ts) turns that into ok:false with the message.
-export async function runAudit(env: Env, fetchFn: FetchFn = fetch): Promise<void> {
+export async function runAudit(
+  env: Env,
+  fetchFn: FetchFn = fetch,
+  shardIndex = 0
+): Promise<void> {
+  const shards = auditShards(CONFIG.projects);
+  // More shards than crons to run them means the tail of the fleet is never
+  // audited — and stale "pass" rows would keep the dashboard looking healthy
+  // while nothing was actually checked. Fail the source instead, loudly.
+  if (shards.length > AUDIT_CRONS.length) {
+    throw new Error(
+      `audit needs ${shards.length} shards but only ${AUDIT_CRONS.length} cron(s) are configured; ` +
+        `add one to src/schedule.ts AND wrangler.toml`
+    );
+  }
+  // A shard index past the end is not an error: it happens whenever the fleet
+  // shrinks enough to need fewer shards than there are crons. Nothing to do.
+  const projects = shards[shardIndex] ?? [];
   const checkedAt = new Date().toISOString();
   const failures: string[] = [];
-  for (const project of CONFIG.projects) {
+  for (const project of projects) {
     try {
       const input = await collectAuditInput(env.GITHUB_TOKEN, project, fetchFn);
       const results = runRepoChecks(input);

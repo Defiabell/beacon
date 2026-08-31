@@ -394,7 +394,7 @@ describe("POST /api/admin/collect", () => {
     const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
     const res = await handleAdmin(req("POST", "/api/admin/collect"), env, "/api/admin/collect", alwaysNotFound);
     expect(res.status).toBe(200);
-    const reports = await res.json<{ source: string; ok: boolean }[]>();
+    const { reports } = await res.json<{ reports: { source: string; ok: boolean }[] }>();
     expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "posts", "rum"]);
   });
 
@@ -409,7 +409,7 @@ describe("POST /api/admin/collect", () => {
       alwaysNotFound
     );
     expect(res.status).toBe(200);
-    const reports = await res.json<{ source: string; ok: boolean }[]>();
+    const { reports } = await res.json<{ reports: { source: string; ok: boolean }[] }>();
     expect(reports.map(r => r.source).sort()).toEqual(["github", "posts"]);
 
     const sourceRuns = await db.listSourceRuns(env.DB);
@@ -425,8 +425,41 @@ describe("POST /api/admin/collect", () => {
       alwaysNotFound
     );
     expect(res.status).toBe(200);
-    const reports = await res.json<{ source: string; ok: boolean }[]>();
-    expect(reports.map(r => r.source)).toEqual(["audit"]);
+    // The audit is sharded, so the response must say how many shards exist and
+    // which one ran — otherwise a caller running it by hand would believe one
+    // call covered the whole fleet when it covered a slice.
+    const body = await res.json<{ reports: { source: string }[]; auditShards: number; ranShard: number }>();
+    expect(body.reports.map(r => r.source)).toEqual(["audit"]);
+    expect(body.auditShards).toBeGreaterThanOrEqual(1);
+    expect(body.ranShard).toBe(0);
+  });
+
+  it("runs the requested audit shard, not always the first", async () => {
+    const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
+    const res = await handleAdmin(
+      req("POST", "/api/admin/collect?sources=audit&shard=1"),
+      env,
+      "/api/admin/collect",
+      alwaysNotFound
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json<{ ranShard: number }>();
+    expect(body.ranShard).toBe(1);
+  });
+
+  it("rejects a non-integer or negative shard rather than coercing it to 0", async () => {
+    // Silently running shard 0 for "?shard=abc" would report success for a
+    // slice the caller never asked for.
+    const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
+    for (const bad of ["abc", "-1", "1.5"]) {
+      const res = await handleAdmin(
+        req("POST", `/api/admin/collect?sources=audit&shard=${bad}`),
+        env,
+        "/api/admin/collect",
+        alwaysNotFound
+      );
+      expect(res.status, `shard=${bad}`).toBe(400);
+    }
   });
 
   it("400s with an unknown source name, and runs nothing", async () => {

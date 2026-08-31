@@ -138,8 +138,8 @@ async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<Sou
   return { ok: true };
 }
 
-async function collectAudit(env: Env, fetchFn: FetchFn): Promise<SourceResult> {
-  await runAudit(env, fetchFn);
+async function collectAudit(env: Env, fetchFn: FetchFn, shard: number): Promise<SourceResult> {
+  await runAudit(env, fetchFn, shard);
   return { ok: true };
 }
 
@@ -154,7 +154,11 @@ export async function runDailyCollect(
   env: Env,
   now: Date,
   fetchFn: FetchFn = fetch,
-  sources: SourceName[] = ALL_SOURCES
+  sources: SourceName[] = ALL_SOURCES,
+  // Which audit shard to run. Ignored unless "audit" is among `sources`.
+  // Each shard is a slice of the fleet small enough to fit one invocation's
+  // subrequest budget; see src/audit/run.ts auditShards.
+  auditShard = 0
 ): Promise<CollectorReport[]> {
   const date = now.toISOString().slice(0, 10);
   const reports: CollectorReport[] = [];
@@ -167,6 +171,8 @@ export async function runDailyCollect(
     reports.push(await runSource(env.DB, "cloudflare", () => collectCloudflare(env, date, fetchFn)));
   }
   if (sources.includes("rum")) reports.push(await runSource(env.DB, "rum", () => collectRum(env, date, fetchFn)));
-  if (sources.includes("audit")) reports.push(await runSource(env.DB, "audit", () => collectAudit(env, fetchFn)));
+  if (sources.includes("audit")) {
+    reports.push(await runSource(env.DB, "audit", () => collectAudit(env, fetchFn, auditShard)));
+  }
   return reports;
 }
