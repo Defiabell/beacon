@@ -691,11 +691,13 @@ describe("renderPosts", () => {
     const rows: PostWithMetrics[] = [
       {
         post: { id: 1, url: "https://www.v2ex.com/t/1", platform: "v2ex", project: "nightide", title: "夜潮发布", publishedAt: null },
-        latest: { date: "2026-08-01", views: 100, replies: 5, likes: null, score: null }
+        latest: { date: "2026-08-01", views: 100, replies: 5, likes: null, score: null },
+        stale: false
       },
       {
         post: { id: 2, url: "https://news.ycombinator.com/item?id=1", platform: "hn", project: "shotsync", title: "Show HN: shotsync", publishedAt: null },
-        latest: null
+        latest: null,
+        stale: false
       }
     ];
     const html = renderPosts(rows, false);
@@ -709,7 +711,8 @@ describe("renderPosts", () => {
     const rows: PostWithMetrics[] = [
       {
         post: { id: 1, url: "https://example.com", platform: "v2ex", project: "nightide", title: "<script>alert(1)</script>", publishedAt: null },
-        latest: null
+        latest: null,
+        stale: false
       }
     ];
     const html = renderPosts(rows, false);
@@ -949,5 +952,64 @@ describe("renderLogin", () => {
     const html = renderLogin(true);
     expect(html).toContain('class="error-text"');
     expect(html).toContain("令牌错误");
+  });
+});
+
+/**
+ * "Show a dash, don't guess" — owner, 2026-09-09. A number we could not refresh
+ * must not be presented as the current one; the platform being unreachable and
+ * the platform reporting zero engagement are different facts and the table has
+ * to tell them apart.
+ */
+describe("renderPosts with stale metrics", () => {
+  const stalePost = (): PostWithMetrics => ({
+    post: { id: 1, url: "https://www.v2ex.com/t/1229945", platform: "v2ex", project: "nightide", title: "夜潮发布", publishedAt: null },
+    latest: { date: "2026-09-04", views: 300, replies: 4, likes: null, score: null },
+    stale: true
+  });
+
+  it("renders a dash instead of the last known number", () => {
+    const html = renderPosts([stalePost()], false);
+    const cells = html.match(/<td class="num[^"]*"[^>]*>(.*?)<\/td>/g) ?? [];
+    expect(cells).toHaveLength(3);
+    for (const cell of cells) expect(cell).toContain(">—<");
+    // The figures themselves must not appear as cell content anywhere.
+    expect(html).not.toMatch(/<td class="num">4<\/td>/);
+    expect(html).not.toMatch(/<td class="num">300<\/td>/);
+  });
+
+  /**
+   * The old value is not destroyed, only demoted: "—" has to mean "we could not
+   * reach V2EX", never "we never knew". The date it was last collected is the
+   * part that makes the dash actionable.
+   */
+  it("keeps the last known figure and its date in the cell title", () => {
+    const html = renderPosts([stalePost()], false);
+    expect(html).toContain('title="最后一次采集成功是 2026-09-04，当时是 4"');
+    expect(html).toContain('title="最后一次采集成功是 2026-09-04，当时是 300"');
+  });
+
+  it("marks the cell so a row of dashes does not read as zeroes", () => {
+    expect(renderPosts([stalePost()], false)).toContain('class="num stale"');
+  });
+
+  it("still prints the number when the row is current", () => {
+    const fresh: PostWithMetrics = { ...stalePost(), stale: false };
+    const html = renderPosts([fresh], false);
+    expect(html).toContain('<td class="num">4</td>');
+    expect(html).toContain('<td class="num">300</td>');
+    expect(html).not.toContain("num stale");
+  });
+
+  /**
+   * A post that has never been collected has no last-known value to name, so it
+   * gets the plain em dash with no title — distinct in the markup from a figure
+   * that went stale, which is the whole point of tracking the two separately.
+   */
+  it("gives a never-collected post a plain dash, not a stale one", () => {
+    const never: PostWithMetrics = { post: stalePost().post, latest: null, stale: false };
+    const html = renderPosts([never], false);
+    expect(html).toContain('<td class="num">—</td>');
+    expect(html).not.toContain("num stale");
   });
 });

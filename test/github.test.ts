@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fetchRepoTraffic } from "../src/collect/github";
+import { fetchRepoMeta, fetchRepoTraffic } from "../src/collect/github";
 import views from "./fixtures/gh-views.json";
 import clones from "./fixtures/gh-clones.json";
 import referrers from "./fixtures/gh-referrers.json";
@@ -14,9 +14,17 @@ const stub: typeof fetch = async (input) => {
   return new Response("not found", { status: 404 });
 };
 
+const META = { stars: repoMeta.stargazers_count, forks: repoMeta.forks_count };
+
+describe("fetchRepoMeta", () => {
+  it("reads stars and forks off the repo endpoint", async () => {
+    expect(await fetchRepoMeta("tok", "Defiabell/shotsync", stub)).toEqual(META);
+  });
+});
+
 describe("fetchRepoTraffic", () => {
   it("merges views+clones by date and attaches stars/forks", async () => {
-    const t = await fetchRepoTraffic("tok", "Defiabell/shotsync", stub);
+    const t = await fetchRepoTraffic("tok", "Defiabell/shotsync", META, stub);
     const d = t.daily.find(r => r.date === "2026-08-01")!;
     const viewDay = views.views.find((v: { timestamp: string }) => v.timestamp.startsWith("2026-08-01"))!;
     const cloneDay = clones.clones.find((c: { timestamp: string }) => c.timestamp.startsWith("2026-08-01"))!;
@@ -29,7 +37,7 @@ describe("fetchRepoTraffic", () => {
     expect(t.referrers.length).toBe(referrers.length);
   });
   it("fills the non-overlapping metric with 0 on a views-only date, still attaching stars/forks", async () => {
-    const t = await fetchRepoTraffic("tok", "Defiabell/shotsync", stub);
+    const t = await fetchRepoTraffic("tok", "Defiabell/shotsync", META, stub);
     const d = t.daily.find(r => r.date === "2026-07-30")!;
     const viewDay = views.views.find((v: { timestamp: string }) => v.timestamp.startsWith("2026-07-30"))!;
     expect(clones.clones.some((c: { timestamp: string }) => c.timestamp.startsWith("2026-07-30"))).toBe(false);
@@ -42,6 +50,6 @@ describe("fetchRepoTraffic", () => {
   });
   it("throws on non-2xx", async () => {
     const bad: typeof fetch = async () => new Response("nope", { status: 403 });
-    await expect(fetchRepoTraffic("tok", "o/r", bad)).rejects.toThrow(/403/);
+    await expect(fetchRepoTraffic("tok", "o/r", META, bad)).rejects.toThrow(/403/);
   });
 });

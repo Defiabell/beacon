@@ -7,6 +7,8 @@ import {
   handlePublicApi,
   computeStarsDelta,
   referredTrafficFor,
+  metricsAreStale,
+  METRICS_FRESH_DAYS,
   type Overview,
   type ProjectDetail,
   type MatrixData,
@@ -531,5 +533,49 @@ describe("sitePv7d", () => {
     // most recent 7 dates: 07-27..08-02 -> 103+104+105+106+107+108+109 = 742
     // (07-24/25/26 = 100+101+102 = 303 must be excluded)
     expect(body.sitePv7d).toBe(742);
+  });
+});
+
+/**
+ * V2EX rate-limits its legacy API to 600 requests/hour per IP and a Worker's
+ * egress IP is shared across Cloudflare's fleet, so most collection runs get
+ * only one or two of the V2EX posts through. A failed fetch writes no row, so
+ * before this rule the table showed whichever number last succeeded as though
+ * it were current — a four-day-old reply count reading as live.
+ */
+describe("metricsAreStale", () => {
+  it("treats today and yesterday as current", () => {
+    expect(metricsAreStale("2026-09-09", "2026-09-09")).toBe(false);
+    expect(metricsAreStale("2026-09-08", "2026-09-09")).toBe(false);
+  });
+
+  it("treats anything older as stale", () => {
+    expect(metricsAreStale("2026-09-07", "2026-09-09")).toBe(true);
+    expect(metricsAreStale("2026-09-04", "2026-09-09")).toBe(true);
+  });
+
+  /**
+   * The one-day tolerance exists because the cheap collector runs at 01:00 UTC
+   * (CHEAP_CRON), so nothing has a row for "today" until then. Pinning the
+   * constant keeps a future edit from silently making the window a week.
+   */
+  it("tolerates exactly one day, no more", () => {
+    expect(METRICS_FRESH_DAYS).toBe(1);
+  });
+
+  /** Month and year boundaries go through Date, not string subtraction. */
+  it("crosses a month boundary", () => {
+    expect(metricsAreStale("2026-08-31", "2026-09-01")).toBe(false);
+    expect(metricsAreStale("2026-08-30", "2026-09-01")).toBe(true);
+  });
+
+  it("crosses a year boundary", () => {
+    expect(metricsAreStale("2025-12-31", "2026-01-01")).toBe(false);
+    expect(metricsAreStale("2025-12-30", "2026-01-01")).toBe(true);
+  });
+
+  /** A row dated in the future is not stale — clock skew must not blank a cell. */
+  it("does not call a future row stale", () => {
+    expect(metricsAreStale("2026-09-10", "2026-09-09")).toBe(false);
   });
 });

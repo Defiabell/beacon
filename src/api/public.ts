@@ -97,6 +97,59 @@ export interface Overview {
 export interface PostWithMetrics {
   post: Post;
   latest: (PostMetrics & { date: string }) | null;
+  /**
+   * True when `latest` is too old to be presented as the current figure.
+   *
+   * Collection can fail per-post without failing the run — V2EX rate-limits
+   * the legacy API to 600 requests/hour **per IP**, and a Worker's egress IP is
+   * shared across Cloudflare's whole fleet, so most days only one or two of the
+   * V2EX posts get through. A failed fetch writes no row at all, which left the
+   * table rendering whichever number last succeeded as though it were today's:
+   * a four-day-old reply count that reads as live. The UI shows `—` for these
+   * instead, and names the date the figure is actually from.
+   */
+  stale: boolean;
+}
+
+/**
+ * How old a metrics row may be and still count as current.
+ *
+ * One day, not zero: the cheap collector runs at 01:00 UTC (CHEAP_CRON in
+ * src/schedule.ts), so between midnight and then nothing has a row for "today"
+ * yet, and a zero-tolerance rule would blank every number on the site for that
+ * hour. One day also absorbs a single missed run. Anything older is a genuine
+ * collection failure and must not be shown as the current value.
+ */
+export const METRICS_FRESH_DAYS = 1;
+
+/** `date` shifted by whole days, both in and out as YYYY-MM-DD (UTC). */
+function shiftDay(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * String comparison rather than Date arithmetic on the operands: YYYY-MM-DD is
+ * lexicographically ordered, and both sides are already normalised to it.
+ */
+export function metricsAreStale(rowDate: string, today: string): boolean {
+  return rowDate < shiftDay(today, -METRICS_FRESH_DAYS);
+}
+
+/** Attaches the freshness verdict, so callers never repeat the rule. */
+async function withStaleness(
+  db: D1Database,
+  post: Post,
+  today: string
+): Promise<PostWithMetrics> {
+  const latest = await latestPostMetrics(db, post.id!);
+  return { post, latest, stale: latest !== null && metricsAreStale(latest.date, today) };
+}
+
+/** Today in UTC — the same clock the collectors stamp their rows with. */
+function utcToday(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
 export interface ProjectDetail {
@@ -372,8 +425,9 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
     fetchEventInputs(db)
   ]);
   const projectPosts = allPosts.filter(p => p.project === project.name);
+  const today = utcToday();
   const posts: PostWithMetrics[] = await Promise.all(
-    projectPosts.map(async post => ({ post, latest: await latestPostMetrics(db, post.id!) }))
+    projectPosts.map(post => withStaleness(db, post, today))
   );
   const summary = computeProjectSummary(project, starSeries, repoSeriesSummary, referrers, projectPosts.length);
 
@@ -535,7 +589,8 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
 export async function buildPostsWithMetrics(env: Env): Promise<PostWithMetrics[]> {
   const db = env.DB;
   const posts = await listPosts(db);
-  return Promise.all(posts.map(async post => ({ post, latest: await latestPostMetrics(db, post.id!) })));
+  const today = utcToday();
+  return Promise.all(posts.map(post => withStaleness(db, post, today)));
 }
 
 const CACHE_CONTROL = "public, max-age=60, s-maxage=600";

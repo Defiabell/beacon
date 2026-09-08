@@ -333,13 +333,21 @@ function postsTable(rows: PostWithMetrics[], opts: { showProject: boolean; showD
     .map(r => {
       const title = esc(r.post.title || r.post.url);
       const platform = PLATFORM_LABELS[r.post.platform] ?? r.post.platform;
+      // A stale row is reported as "no current figure" rather than as its last
+      // known value — see PostWithMetrics.stale for why one exists at all. The
+      // number is not thrown away: the cell's title attribute names the date it
+      // came from, so "—" means "we could not reach the platform", not "we
+      // never knew".
       const scoreLike = r.latest?.likes ?? r.latest?.score ?? null;
+      const cell = (value: number | null | undefined): string =>
+        r.stale && r.latest !== null
+          ? `<td class="num stale" title="最后一次采集成功是 ${esc(r.latest.date)}，当时是 ${fmtNum(value)}">—</td>`
+          : `<td class="num">${fmtNum(value)}</td>`;
       return (
         `<tr><td><a class="title" href="${esc(r.post.url)}" target="_blank" rel="noopener">${title}</a></td>` +
         `${opts.showProject ? `<td class="proj">${esc(r.post.project)}</td>` : ""}` +
         `<td><span class="platform">${esc(platform)}</span></td>` +
-        `<td class="num">${fmtNum(r.latest?.replies)}</td><td class="num">${fmtNum(r.latest?.views)}</td>` +
-        `<td class="num">${fmtNum(scoreLike)}</td>` +
+        `${cell(r.latest?.replies)}${cell(r.latest?.views)}${cell(scoreLike)}` +
         `${opts.showDate ? `<td>${r.post.publishedAt ? esc(fmtDate(r.post.publishedAt)) : "—"}</td>` : ""}</tr>`
       );
     })

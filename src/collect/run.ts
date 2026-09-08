@@ -1,6 +1,6 @@
 import type { Env, Post } from "../types";
 import type { FetchFn } from "./github";
-import { fetchRepoTraffic } from "./github";
+import { fetchRepoMeta, fetchRepoTraffic } from "./github";
 import { fetchPostMetrics } from "./posts";
 import { fetchSiteDaily } from "./goatcounter";
 import { fetchWorkerDaily } from "./cloudflare";
@@ -48,24 +48,29 @@ async function runSource(db: D1Database, source: string, fn: () => Promise<Sourc
 async function collectGithub(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {
   const failures: string[] = [];
   for (const project of CONFIG.projects) {
+    // Two stages, deliberately not one try block. The star count comes from
+    // public repo metadata; traffic needs the repo to be inside the token's
+    // fine-grained allowlist. Collapsing them meant a traffic 403 discarded a
+    // star count that had already been fetched, and the project rendered as 0
+    // stars — a number that looks like an answer. Now the star tally lands
+    // regardless, and only the traffic half is reported as failed.
+    let meta;
     try {
-      const traffic = await fetchRepoTraffic(env.GITHUB_TOKEN, project.repo, fetchFn);
+      meta = await fetchRepoMeta(env.GITHUB_TOKEN, project.repo, fetchFn);
+      await upsertStarHistory(env.DB, project.repo, [{ date, stars: meta.stars }]);
+    } catch (e) {
+      failures.push(`${project.repo}: ${e instanceof Error ? e.message : String(e)}`);
+      continue;
+    }
+    try {
+      const traffic = await fetchRepoTraffic(env.GITHUB_TOKEN, project.repo, meta, fetchFn);
       await upsertRepoDaily(env.DB, traffic.daily);
       await replaceReferrerSnapshot(env.DB, project.repo, date, traffic.referrers);
-      // Every row in `traffic.daily` carries the same (current) stargazers_count,
-      // fetched once from the repo-meta call inside fetchRepoTraffic — so any
-      // element gives us "today's" star tally. When there's no traffic data at
-      // all (no views/clones in the response window), there's nothing to read
-      // the count off of, so we simply skip the star_history write for this repo.
-      // (Empirically GitHub zero-fills the 14-day traffic window, so this is
-      // defensive rather than an expected path on a successful call.)
-      const starsToday = traffic.daily.length > 0 ? traffic.daily[traffic.daily.length - 1].stars : undefined;
-      if (starsToday !== undefined) {
-        await upsertStarHistory(env.DB, project.repo, [{ date, stars: starsToday }]);
-      }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      failures.push(`${project.repo}: ${msg}`);
+      // No repo_daily row is written on this path, and that is the point: a row
+      // of zeroes would assert "nobody visited today" when the truth is "we
+      // were not allowed to look". An absent row renders as no data.
+      failures.push(`${project.repo} traffic: ${e instanceof Error ? e.message : String(e)}`);
     }
   }
   return failures.length > 0 ? { ok: false, error: failures.join("; ") } : { ok: true };

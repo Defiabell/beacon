@@ -55,14 +55,36 @@ export async function backfillStarHistory(token: string, repo: string, fetchFn: 
 
 interface DayStat { timestamp: string; count: number; uniques: number; }
 
+export interface RepoMeta { stars: number; forks: number; }
+
+/**
+ * Star and fork counts, from the repo endpoint alone.
+ *
+ * Split out from the traffic call because the two need different permissions
+ * and fail independently: `/repos/{repo}` is public metadata that any token can
+ * read, while the three `/traffic/*` endpoints require the repo to be inside a
+ * fine-grained token's allowlist. Fetching them together under one Promise.all
+ * meant a traffic 403 threw away a star count that had already arrived — the
+ * dashboard showed a repo with 5 stars as having 0, which is worse than showing
+ * nothing, because a zero looks like an answer.
+ */
+export async function fetchRepoMeta(token: string, repo: string, fetchFn: FetchFn = fetch): Promise<RepoMeta> {
+  const meta = await ghJson<{ stargazers_count: number; forks_count: number }>(token, `/repos/${repo}`, fetchFn);
+  return { stars: meta.stargazers_count, forks: meta.forks_count };
+}
+
 export interface RepoTraffic { daily: RepoDaily[]; referrers: ReferrerRow[]; }
 
-export async function fetchRepoTraffic(token: string, repo: string, fetchFn: FetchFn = fetch): Promise<RepoTraffic> {
-  const [views, clones, referrers, meta] = await Promise.all([
+export async function fetchRepoTraffic(
+  token: string,
+  repo: string,
+  meta: RepoMeta,
+  fetchFn: FetchFn = fetch
+): Promise<RepoTraffic> {
+  const [views, clones, referrers] = await Promise.all([
     ghJson<{ views: DayStat[] }>(token, `/repos/${repo}/traffic/views`, fetchFn),
     ghJson<{ clones: DayStat[] }>(token, `/repos/${repo}/traffic/clones`, fetchFn),
-    ghJson<{ referrer: string; count: number; uniques: number }[]>(token, `/repos/${repo}/traffic/popular/referrers`, fetchFn),
-    ghJson<{ stargazers_count: number; forks_count: number }>(token, `/repos/${repo}`, fetchFn)
+    ghJson<{ referrer: string; count: number; uniques: number }[]>(token, `/repos/${repo}/traffic/popular/referrers`, fetchFn)
   ]);
   const byDate = new Map<string, RepoDaily>();
   const day = (ts: string) => ts.slice(0, 10);
@@ -75,8 +97,8 @@ export async function fetchRepoTraffic(token: string, repo: string, fetchFn: Fet
         uniqueViews: 0,
         clones: 0,
         uniqueClones: 0,
-        stars: meta.stargazers_count,
-        forks: meta.forks_count
+        stars: meta.stars,
+        forks: meta.forks
       });
     }
     return byDate.get(date)!;

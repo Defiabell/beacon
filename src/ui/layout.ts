@@ -152,6 +152,10 @@ table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; font-size: 11px; color: var(--muted); font-weight: 600; padding: 6px 8px 6px 0; border-bottom: 1px solid var(--grid); }
 td { padding: 8px 8px 8px 0; border-bottom: 1px solid var(--grid); }
 td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* A figure we could not refresh. Dimmed so a table of dashes reads as "not
+   collected" at a glance instead of as a row of zeroes; the cell's title
+   attribute carries the last known value and its date. */
+td.num.stale { color: var(--dim, #999); }
 tr:last-child td { border-bottom: 0; }
 td a.title { color: var(--ink-1); text-decoration: none; font-weight: 550; }
 ul.audit { list-style: none; margin: 0; padding: 0; font-size: 13.5px; }

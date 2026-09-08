@@ -146,6 +146,43 @@ describe("runDailyCollect", () => {
     expect(githubRun.error).toContain(failingRepo);
   });
 
+  /**
+   * A traffic 403 must not cost us the star count.
+   *
+   * yixi sat on the dashboard showing 0 stars while GitHub reported 5: the repo
+   * was outside the fine-grained token's allowlist, so `/traffic/*` returned
+   * 403, and the single try block threw away the `/repos/{repo}` response that
+   * had already arrived with the real number. A zero looks like an answer,
+   * which makes it worse than an empty chart.
+   */
+  it("keeps the star count when only the traffic half is forbidden", async () => {
+    const forbidden = CONFIG.projects[2].repo;
+    const stubWithForbiddenTraffic: typeof fetch = async input => {
+      const url = String(input);
+      if (url.includes(`/repos/${forbidden}/traffic/`)) return new Response("forbidden", { status: 403 });
+      if (url.endsWith("/traffic/views")) return Response.json(views);
+      if (url.endsWith("/traffic/clones")) return Response.json(clones);
+      if (url.endsWith("/traffic/popular/referrers")) return Response.json(referrers);
+      if (url.includes("/repos/")) return Response.json(repoMeta);
+      return new Response("not found", { status: 404 });
+    };
+
+    const reports = await runDailyCollect(env, new Date("2026-08-02T00:00:00Z"), stubWithForbiddenTraffic, ["github"]);
+    const github = reports.find(r => r.source === "github")!;
+    expect(github.ok).toBe(false);
+    // Reported as a traffic failure specifically, so the log says which half broke.
+    expect(github.error).toContain(`${forbidden} traffic:`);
+
+    // The star tally landed anyway — this is the whole point.
+    const stars = await db.getStarSeries(env.DB, forbidden);
+    expect(stars.find(r => r.date === "2026-08-02")?.stars).toBe(repoMeta.stargazers_count);
+
+    // And no repo_daily row was invented: an absent row renders as "no data",
+    // whereas a row of zeroes would claim nobody visited.
+    const series = await db.getRepoSeries(env.DB, forbidden, 30);
+    expect(series.find(r => r.date === "2026-08-02")).toBeUndefined();
+  });
+
   // C1: the daily cron is split across two invocations (wrangler.toml's two
   // crons + src/index.ts's event.cron routing) to stay under the free tier's
   // 50-subrequests-per-invocation cap. This exercises the `sources` filter
