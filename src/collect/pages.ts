@@ -167,7 +167,7 @@ export async function fetchPagesProjects(
   const out: PagesProject[] = [];
   for (let page = 1; page <= MAX_PROJECT_PAGES; page++) {
     const res = await fetchFn(
-      `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects?page=${page}&per_page=25`,
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/pages/projects?page=${page}`,
       { headers: { Authorization: `Bearer ${token}` } }
     );
     if (!res.ok) throw new Error(`cloudflare pages projects ${res.status}`);

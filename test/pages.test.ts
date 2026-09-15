@@ -157,13 +157,16 @@ describe("fetchPagesProjects", () => {
     const stub: typeof fetch = async input => {
       const url = String(input);
       seenUrls.push(url);
-      // NOTE: matching must not be a plain substring check — the URL also
-      // contains "per_page=25", which itself contains the substring "page=2".
+      // Read the param properly rather than substring-matching "page=2".
       return Response.json(new URL(url).searchParams.get("page") === "2" ? page2 : page1);
     };
     const projects = await fetchPagesProjects("acc", "tok", stub);
     expect(projects.map(p => p.name)).toEqual(["a", "b"]);
     expect(seenUrls).toHaveLength(2);
+    // Regression: the live Pages endpoint answers 400 to any request carrying
+    // `per_page` (verified 2026-09-15 with curl: `?page=1` 200, `?per_page=25`
+    // 400). The first deployed collector shipped with it and every run failed.
+    for (const url of seenUrls) expect(new URL(url).searchParams.has("per_page")).toBe(false);
   });
 
   it("stops at a single page when total_pages is absent (defaults to 1)", async () => {
