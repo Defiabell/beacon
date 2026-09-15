@@ -5,6 +5,7 @@ import { fetchPostMetrics } from "./posts";
 import { fetchSiteDaily } from "./goatcounter";
 import { fetchWorkerDaily } from "./cloudflare";
 import { fetchRumDaily } from "./rum";
+import { fetchPagesFunctionsDaily, fetchPagesProjects, resolvePagesFunctionsToWorkerDaily } from "./pages";
 import { runAudit } from "../audit/run";
 import { CONFIG } from "../config";
 import {
@@ -24,8 +25,8 @@ export interface CollectorReport {
   error?: string;
 }
 
-export type SourceName = "github" | "posts" | "goatcounter" | "cloudflare" | "rum" | "audit";
-export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "cloudflare", "rum", "audit"];
+export type SourceName = "github" | "posts" | "goatcounter" | "cloudflare" | "pages" | "rum" | "audit";
+export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "cloudflare", "pages", "rum", "audit"];
 
 interface SourceResult {
   ok: boolean;
@@ -120,6 +121,32 @@ async function collectCloudflare(env: Env, date: string, fetchFn: FetchFn): Prom
   return { ok: true };
 }
 
+// Same account/token as collectCloudflare (not a separate credential pair):
+// the Pages Functions dataset and the Pages project list both live under this
+// account, and both were confirmed live 2026-09-15 to work with the token
+// already granted for workersInvocationsAdaptive — see src/collect/pages.ts.
+async function collectPages(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {
+  if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
+    return { ok: true, error: "not configured" };
+  }
+  // Same 3-day re-fetch window as collectCloudflare/collectRum, and for the
+  // same reason: Cloudflare restates recent days as data settles.
+  const start = new Date(`${date}T00:00:00Z`);
+  start.setUTCDate(start.getUTCDate() - 2);
+  const [rows, projects] = await Promise.all([
+    fetchPagesFunctionsDaily(
+      env.CLOUDFLARE_ACCOUNT_ID,
+      env.CLOUDFLARE_API_TOKEN,
+      start.toISOString().slice(0, 10),
+      date,
+      fetchFn
+    ),
+    fetchPagesProjects(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN, fetchFn)
+  ]);
+  await upsertWorkerDaily(env.DB, resolvePagesFunctionsToWorkerDaily(rows, projects));
+  return { ok: true };
+}
+
 async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {
   if (!env.CLOUDFLARE_ACCOUNT_ID || !env.CLOUDFLARE_API_TOKEN) {
     return { ok: true, error: "not configured" };
@@ -174,6 +201,9 @@ export async function runDailyCollect(
   }
   if (sources.includes("cloudflare")) {
     reports.push(await runSource(env.DB, "cloudflare", () => collectCloudflare(env, date, fetchFn)));
+  }
+  if (sources.includes("pages")) {
+    reports.push(await runSource(env.DB, "pages", () => collectPages(env, date, fetchFn)));
   }
   if (sources.includes("rum")) reports.push(await runSource(env.DB, "rum", () => collectRum(env, date, fetchFn)));
   if (sources.includes("audit")) {

@@ -10,7 +10,7 @@
 
 beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织：
 
-- **Measure（度量）** —— 每日定时任务（`wrangler.toml` 里的 `0 1 * * *`，UTC）拉取每个被跟踪仓库的 GitHub 流量/clone/star 历史（`src/collect/github.ts`），刷新你在 V2EX / LinuxDO / Hacker News / Reddit 上登记过的每篇帖子的指标（`src/collect/posts.ts`），以及可选的 GoatCounter 站点每日 pageview（`src/collect/goatcounter.ts`）。
+- **Measure（度量）** —— 每日定时任务（`wrangler.toml` 里的 `0 1 * * *`，UTC）拉取每个被跟踪仓库的 GitHub 流量/clone/star 历史（`src/collect/github.ts`），刷新你在 V2EX / LinuxDO / Hacker News / Reddit 上登记过的每篇帖子的指标（`src/collect/posts.ts`），读取本 Cloudflare 账户下每个 Worker（`src/collect/cloudflare.ts`）和每个 Pages 项目 Functions（`src/collect/pages.ts`——单独一个 GraphQL 数据集加一次 REST 项目查询，因为 Pages Functions 的流量对 Worker 那个数据集完全不可见）各自的请求量，拉取 `src/config.ts` 里配置站点的 RUM 浏览量（`src/collect/rum.ts`），以及可选的 GoatCounter 站点每日 pageview（`src/collect/goatcounter.ts`）。
 - **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 9 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 

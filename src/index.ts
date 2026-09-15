@@ -166,13 +166,15 @@ export default {
     }
   },
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // "cloudflare" joins the cheap group: it is a single GraphQL POST, so it
-    // costs one subrequest against that invocation's budget.
+    // "cloudflare" and "rum" join the cheap group as a single GraphQL POST
+    // each; "pages" costs two subrequests (a GraphQL POST plus the Pages
+    // project list) — still comfortably under the free tier's cap alongside
+    // the rest of this group.
     // An audit cron identifies itself by position in AUDIT_CRONS, which is also
     // its shard index; -1 means this is the cheap-sources invocation.
     const auditShard = AUDIT_CRONS.indexOf(event.cron);
     const sources: SourceName[] =
-      auditShard >= 0 ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare", "rum"];
+      auditShard >= 0 ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare", "pages", "rum"];
     ctx.waitUntil(
       runDailyCollect(env, new Date(event.scheduledTime), undefined, sources, Math.max(auditShard, 0)).then(
         () => undefined
