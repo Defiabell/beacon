@@ -104,11 +104,94 @@ export interface ImpactWindow {
 
 export type ImpactStatus = "complete" | "collecting" | "insufficient-history";
 
+// Whether this event may be credited with the window numbers beside it at all.
+//
+// computeImpact answers "what did the repo do in the 7 days around this event".
+// That is a coincidence question, not a causal one, and on a busy week it hands
+// the same spike to everything inside it: yixi's 2026-09-05..09-07 window had a
+// V2EX post, three curation self-submissions and one "set a social preview
+// image" todo each reporting the same +38~47 stars / ~750 views. Only one of
+// them caused it — 阮一峰周刊 published, and referrer data says so plainly
+// (ruanyifeng.com, 369 views). The other two submissions were never picked up.
+//
+// src/api/public.ts's referredTrafficFor already draws exactly this distinction
+// for the channel matrix; this carries the verdict onto the impact rows, which
+// are the page that reads as a causal claim.
+export type AttributionVerdict =
+  // The channel's own publication host really did refer people. `views` is
+  // what it referred — the number this event has a claim to.
+  | "referred"
+  // Observable channel, referred nobody. The window lift belongs to something
+  // else, and must not be shown as this event's result.
+  | "no-referral"
+  // The channel declares no referrer host: it publishes off-web (GitHubDaily
+  // goes out via 微博/公众号) or its host is too generic to attribute (an
+  // awesome-list merge arrives as plain github.com). Unknowable, not zero.
+  | "unobservable"
+  // Published before beacon's first referrer snapshot for this repo. GitHub
+  // only serves a 14-day referrer window, so this can never be recovered.
+  | "predates-coverage"
+  // A finished todo is a repo improvement, not a distribution act. It has no
+  // channel and therefore no referrer signature to check it against.
+  | "not-a-channel";
+
+export interface EventAttribution {
+  verdict: AttributionVerdict;
+  channelId?: string;
+  channelName?: string;
+  views: number;
+  uniques: number;
+  // The matched host is claimed by more than one channel, so these numbers
+  // describe the host rather than this channel alone.
+  sharedHost: boolean;
+}
+
+// Structural mirror of src/api/public.ts's ReferredTraffic. Declared here
+// rather than imported so this module stays free of the API layer (and of the
+// import cycle that would create); ReferredTraffic satisfies it by shape.
+export interface ReferralReading {
+  views: number;
+  uniques: number;
+  sharedHost: boolean;
+  predatesCoverage: boolean;
+}
+
+export function attributionFor(
+  kind: EventKind,
+  channel: { id: string; name: string } | undefined,
+  reading: ReferralReading | undefined
+): EventAttribution {
+  const none = { views: 0, uniques: 0, sharedHost: false };
+  if (kind === "todo") return { verdict: "not-a-channel", ...none };
+  if (!channel) return { verdict: "unobservable", ...none };
+  const named = { channelId: channel.id, channelName: channel.name };
+  // undefined reading == the channel declares no referrer hosts at all, which
+  // referredTrafficFor signals by returning undefined rather than zeroes.
+  if (!reading) return { verdict: "unobservable", ...named, ...none };
+  if (reading.predatesCoverage) {
+    return { verdict: "predates-coverage", ...named, ...none, sharedHost: reading.sharedHost };
+  }
+  if (reading.views <= 0) {
+    return { verdict: "no-referral", ...named, ...none, sharedHost: reading.sharedHost };
+  }
+  return {
+    verdict: "referred",
+    ...named,
+    views: reading.views,
+    uniques: reading.uniques,
+    sharedHost: reading.sharedHost
+  };
+}
+
 export interface EventImpact {
   event: ImpactEvent;
   before: ImpactWindow;
   after: ImpactWindow;
   status: ImpactStatus;
+  // Attached by src/api/public.ts's buildImpact, which is the layer that can
+  // reach the channel links and referrer snapshots. computeImpacts stays pure
+  // and leaves this undefined.
+  attribution?: EventAttribution;
 }
 
 function sumViews(rows: RepoDaily[]): number {

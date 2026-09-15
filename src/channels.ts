@@ -395,15 +395,86 @@ export function channelHasSharedReferrerHost(channel: Channel): boolean {
   return channel.referrerHosts.some(h => SHARED_REFERRER_HOSTS.has(h));
 }
 
-export interface Suggestion { project: string; channelId: string; channelName: string; score: number; }
+// Resolves the channel a registered post was published on, for callers that
+// need to ask "did this channel actually refer anybody" about a post that was
+// never explicitly linked to a matrix cell.
+//
+// Host alone is not enough: five channels publish under github.com (every
+// issue/discussion-based pitch), so a bare host match would credit 阮一峰周刊
+// with a GitHubDaily submission. When a host is shared, the owner/repo prefix
+// of the channel's own submission URL has to match the post's path too.
+export function channelForPostUrl(url: string): Channel | undefined {
+  const target = parseUrl(url);
+  if (!target) return undefined;
+  const sameHost = CHANNELS.filter(c => parseUrl(c.url)?.host === target.host);
+  if (sameHost.length <= 1) return sameHost[0];
+  let best: Channel | undefined;
+  let bestLength = -1;
+  for (const c of sameHost) {
+    const base = repoPrefix(parseUrl(c.url)!.path);
+    if (!base || base.length <= bestLength) continue;
+    if (target.path === base || target.path.startsWith(base + "/")) {
+      best = c;
+      bestLength = base.length;
+    }
+  }
+  return best;
+}
 
-export function suggestPairs(projects: ProjectConfig[], coverage: { project: string; channelId: string; status: string }[]): Suggestion[] {
+function parseUrl(raw: string): { host: string; path: string } | undefined {
+  try {
+    const u = new URL(raw);
+    return { host: u.hostname.toLowerCase(), path: u.pathname.replace(/\/+$/, "") };
+  } catch {
+    return undefined;
+  }
+}
+
+// "/ruanyf/weekly/issues" -> "/ruanyf/weekly"; "/r/SideProject" -> "/r/SideProject".
+// The first two segments are what identifies the destination on every shared
+// host we track (GitHub owner/repo, Reddit r/subreddit).
+function repoPrefix(path: string): string {
+  const parts = path.split("/").filter(Boolean).slice(0, 2);
+  return parts.length ? "/" + parts.join("/") : "";
+}
+
+export interface Suggestion {
+  project: string;
+  channelId: string;
+  channelName: string;
+  score: number;
+  // Views this channel has been *measured* referring, across the whole fleet.
+  // 0 means "no proof", which covers both "never tried" and "tried, referred
+  // nobody" — see suggestPairs for why those are not separated here.
+  provenViews: number;
+}
+
+// Ranks the unposted project x channel pairs.
+//
+// fitScore alone (tag overlap, 1-4) put 阮一峰周刊 and 知乎 in the same bucket,
+// which contradicts what beacon's own surface data says: curation referred 977
+// views over the measured period, community 90. So proof outranks fit — a
+// channel that has demonstrably sent people to *any* project in the fleet
+// sorts above one that merely shares tags.
+//
+// Deliberately a boost and not a penalty. A zero in `provenViews` cannot tell
+// "never submitted anywhere" from "submitted and never picked up", and two of
+// the fleet's pitches are currently sitting in the first state; demoting them
+// for it would be reading absence of evidence as evidence of absence. Untried
+// channels therefore keep their fitScore ordering among themselves.
+export function suggestPairs(
+  projects: ProjectConfig[],
+  coverage: { project: string; channelId: string; status: string }[],
+  provenViewsByChannel: Map<string, number> = new Map()
+): Suggestion[] {
   const covered = new Set(coverage.map(c => `${c.project}:${c.channelId}`));
   const out: Suggestion[] = [];
   for (const p of projects) for (const c of CHANNELS) {
     if (covered.has(`${p.name}:${c.id}`)) continue;
     const score = fitScore(p, c);
-    if (score > 0) out.push({ project: p.name, channelId: c.id, channelName: c.name, score });
+    if (score > 0) {
+      out.push({ project: p.name, channelId: c.id, channelName: c.name, score, provenViews: provenViewsByChannel.get(c.id) ?? 0 });
+    }
   }
-  return out.sort((a, b) => b.score - a.score);
+  return out.sort((a, b) => b.provenViews - a.provenViews || b.score - a.score);
 }

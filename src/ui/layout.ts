@@ -249,6 +249,10 @@ ol.impact li:first-child { border-top: 0; }
 .ev-title.pending, .ev-title.partial { color: var(--ink-2); font-weight: 500; }
 .ev-wins { display: flex; align-items: center; gap: 14px; margin-top: 8px; flex-wrap: wrap; }
 .ev-arrow { color: var(--muted); font-size: 15px; }
+.ev-attr { font-size: 12.5px; margin-top: 7px; padding-left: 10px; border-left: 2px solid var(--axis); color: var(--ink-2); }
+.ev-attr.attr-referred { border-left-color: var(--pass); color: var(--good-text); }
+.ev-attr.attr-no-referral { border-left-color: var(--fail); color: var(--fail); }
+.ev-attr.attr-unobservable, .ev-attr.attr-predates-coverage, .ev-attr.attr-not-a-channel { color: var(--muted); }
 .win { border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; min-width: 190px; }
 .win-h { font-size: 11px; color: var(--muted); display: flex; gap: 6px; align-items: baseline; }
 .win-n { display: flex; gap: 12px; font-size: 13px; margin-top: 2px; font-variant-numeric: tabular-nums; }

@@ -151,3 +151,88 @@ describe("buildMatrix: coverage[].effect", () => {
     expect(linuxdoRow.effect).toBeUndefined();
   });
 });
+
+// The scenario that motivated referrer-backed attribution, reproduced through
+// the real DB: three self-submissions filed on the same day, for the same
+// project, inside the same spike. The window arithmetic cannot tell them apart
+// — it gives all three identical numbers — and only one of them caused
+// anything. Before this, the page credited each of them with the whole wave.
+describe("buildImpact: referrer-backed attribution", () => {
+  const YIXI = CONFIG.projects.find(p => p.name === "yixi")!;
+
+  beforeAll(async () => {
+    const quiet = ["2026-08-29", "2026-08-30", "2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"];
+    const loud = ["2026-09-05", "2026-09-06", "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11"];
+    await db.upsertRepoDaily(env.DB, [
+      ...quiet.map(d => repoRow(YIXI.repo, d, 2, 2, 0)),
+      ...loud.map(d => repoRow(YIXI.repo, d, 100, 80, 0))
+    ]);
+    await db.upsertStarHistory(env.DB, YIXI.repo, [
+      { date: "2026-09-04", stars: 5 },
+      { date: "2026-09-11", stars: 45 }
+    ]);
+
+    // Coverage starts 09-01, before the posts — so a zero reading below means
+    // "referred nobody", not "we were not watching" (ReferredTraffic.predatesCoverage).
+    await db.replaceReferrerSnapshot(env.DB, YIXI.repo, "2026-09-01", [
+      { referrer: "github.com", count: 10, uniques: 8 }
+    ]);
+    // Only 阮一峰周刊 ever published. HelloGitHub's host never appears.
+    await db.replaceReferrerSnapshot(env.DB, YIXI.repo, "2026-09-12", [
+      { referrer: "ruanyifeng.com", count: 369, uniques: 227 },
+      { referrer: "github.com", count: 184, uniques: 96 }
+    ]);
+
+    for (const [url, title] of [
+      ["https://github.com/ruanyf/weekly/issues/11509", "一息 · 周刊自荐"],
+      ["https://github.com/521xueweihan/HelloGitHub/issues/3642", "一息 · HelloGitHub 自荐"],
+      ["https://github.com/GitHubDaily/GitHubDaily/issues/1067", "一息 · GitHubDaily 自荐"]
+    ] as const) {
+      await db.insertPost(env.DB, { url, platform: "github", project: YIXI.name, title, publishedAt: "2026-09-05" });
+    }
+  });
+
+  it("gives three same-day submissions identical windows but three different verdicts", async () => {
+    const impacts = await buildImpact(env);
+    const byTitle = (t: string) => impacts.find(i => i.event.title === t)!;
+    const ruanyf = byTitle("一息 · 周刊自荐");
+    const hello = byTitle("一息 · HelloGitHub 自荐");
+    const daily = byTitle("一息 · GitHubDaily 自荐");
+
+    // The window numbers really are the same for all three — that is the trap.
+    for (const i of [hello, daily]) {
+      expect(i.after.views).toBe(ruanyf.after.views);
+      expect(i.after.starsDelta).toBe(ruanyf.after.starsDelta);
+    }
+    expect(ruanyf.after.views).toBe(700);
+    expect(ruanyf.after.starsDelta).toBe(40);
+
+    // 阮一峰周刊 published: its host is in the referrers, so it earns the credit.
+    expect(ruanyf.attribution!.verdict).toBe("referred");
+    expect(ruanyf.attribution!.channelId).toBe("ruanyf-weekly");
+    expect(ruanyf.attribution!.views).toBe(369);
+
+    // HelloGitHub is observable and referred nobody — not the same as unknown.
+    expect(hello.attribution!.verdict).toBe("no-referral");
+    expect(hello.attribution!.channelId).toBe("hellogithub");
+    expect(hello.attribution!.views).toBe(0);
+
+    // GitHubDaily publishes off-web, so there is nothing to observe either way.
+    expect(daily.attribution!.verdict).toBe("unobservable");
+    expect(daily.attribution!.channelId).toBe("githubdaily");
+  });
+
+  it("marks finished todos as non-distribution events", async () => {
+    const impacts = await buildImpact(env);
+    const todos = impacts.filter(i => i.event.kind === "todo");
+    expect(todos.every(i => i.attribution!.verdict === "not-a-channel")).toBe(true);
+  });
+
+  it("flags a post that predates referrer coverage instead of reading it as zero", async () => {
+    const impacts = await buildImpact(env);
+    // nightide's V2EX post (2026-07-27) sits before any referrer snapshot for
+    // that repo — the real case that ReferredTraffic.predatesCoverage exists for.
+    const nightidePost = impacts.find(i => i.event.project === "nightide" && i.event.kind === "post")!;
+    expect(nightidePost.attribution!.verdict).toBe("predates-coverage");
+  });
+});

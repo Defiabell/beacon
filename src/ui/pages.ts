@@ -11,7 +11,7 @@ import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverage
 import type { SiteTotal } from "../db";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
-import type { EventImpact, ImpactWindow } from "../impact/attribute";
+import type { EventImpact, EventAttribution, ImpactWindow } from "../impact/attribute";
 import { CONFIG } from "../config";
 import { page, svgSparkline, esc, type SparkMarker } from "./layout";
 
@@ -142,7 +142,11 @@ function actionItems(o: Overview): ActionItem[] {
           priLabel: "",
           priClass: "",
           srcLabel: "矩阵",
-          title: `${s.project} → ${s.channelName}（适配分 ${s.score}）`,
+          // Proven referral is stated before the fit score because that is the
+          // order suggestPairs now ranks by — a channel that has actually sent
+          // people beats one that merely shares tags, and the label has to say
+          // which kind of suggestion this is or the new ordering looks random.
+          title: `${s.project} → ${s.channelName}（${s.provenViews > 0 ? `实测引流 ${s.provenViews} · ` : ""}适配分 ${s.score}）`,
           // Deep-links to that channel's own how-to entry (renderMatrix's
           // howToGroup anchors one per channel), not just to /matrix — a
           // suggestion that drops you at the top of a 26-column table doesn't
@@ -828,10 +832,40 @@ function impactRow(i: EventImpact): string {
     `<span class="src">${esc(kind)}</span>${platform}` +
     `<a class="proj" href="/p/${encodeURIComponent(e.project)}">${esc(e.project)}</a>` +
     `<span class="ev-title ${cls}">${title}</span></div>` +
+    attributionLine(i.attribution) +
     `<div class="ev-wins">${windowCell("之前 7 天", i.before, beforeNote)}` +
     `<span class="ev-arrow">→</span>` +
     `${windowCell("之后 7 天", i.after, afterNote)}</div></li>`
   );
+}
+
+// The referrer-backed verdict, rendered above the two windows so it is read
+// before the numbers rather than as a footnote to them. Without it the windows
+// read as a causal claim the data does not support — see AttributionVerdict in
+// src/impact/attribute.ts for the case that forced this.
+function attributionLine(a: EventAttribution | undefined): string {
+  if (!a) return "";
+  const name = a.channelName ? esc(a.channelName) : "";
+  const shared = a.sharedHost ? "（该 host 由多个渠道共用，数字属于 host 而非单个渠道）" : "";
+  let text: string;
+  switch (a.verdict) {
+    case "referred":
+      text = `${name} 实测引流 ${a.views} 次访问 · ${a.uniques} 人${shared}`;
+      break;
+    case "no-referral":
+      text = `${name} 一个访问都没送来——下面的变化属于同期的别的事${shared}`;
+      break;
+    case "unobservable":
+      text = name ? `${name} 不产生可识别的 referrer，无法归因` : "未能识别发布渠道，无法归因";
+      break;
+    case "predates-coverage":
+      text = `发布于 beacon 开始记录之前，referrer 已过期，无法归因`;
+      break;
+    case "not-a-channel":
+      text = "仓库改进，不是分发动作；下面只是同期变化";
+      break;
+  }
+  return `<div class="ev-attr attr-${a.verdict}">${text}</div>`;
 }
 
 export function renderImpact(impacts: EventImpact[], authed: boolean): string {
@@ -839,7 +873,7 @@ export function renderImpact(impacts: EventImpact[], authed: boolean): string {
   const body = `${navHeader("impact", authed)}
 <main>
 <h1>效果归因</h1>
-<p class="lead">每一次发帖、每一条做完的待办，对照它前后 7 天的真实数字。窗口未采满的行会标注「统计中」——那不是结论，别当成没效果。</p>
+<p class="lead">每一次发帖、每一条做完的待办，对照它前后 7 天的真实数字。<strong>窗口只能证明同时发生，不能证明因果</strong>——同一周里的几件事会各自领走同一波涨幅，所以每行先给出 referrer 实测的归因结论：只有标着「实测引流」的行，后面的涨幅才真的属于它。窗口未采满的行会标注「统计中」——那不是结论，别当成没效果。</p>
 ${rows ? `<ol class="impact">${rows}</ol>` : `<p class="sub">暂无事件。登记一篇帖子或做完一条待办，这里就会出现它的效果。</p>`}
 </main>`;
   return page("beacon · 效果归因", body);

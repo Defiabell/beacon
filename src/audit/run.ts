@@ -323,6 +323,7 @@ export async function collectAuditInput(
     project: project.name,
     tags: project.tags,
     configHomepage: project.homepage ?? null,
+    licensePolicy: project.licensePolicy ?? "open",
     meta,
     readme,
     releaseAssetCount,

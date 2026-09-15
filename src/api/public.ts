@@ -6,6 +6,7 @@ import {
   suggestPairs,
   referrerMatchesChannel,
   channelHasSharedReferrerHost,
+  channelForPostUrl,
   type Suggestion,
   type ChannelKind,
   type Channel
@@ -38,6 +39,7 @@ import {
   buildEvents,
   computeImpact,
   computeImpacts,
+  attributionFor,
   type ImpactEvent,
   type EventImpact,
   type ImpactStatus,
@@ -351,14 +353,82 @@ async function fetchImpactDataByProject(db: D1Database): Promise<Map<string, Pro
   return new Map(entries);
 }
 
+// Peak referrers for every configured project, keyed by project name. Built
+// once per request and shared, because buildMatrix needs the same map for its
+// coverage cells that buildImpact needs for its attribution verdicts.
+async function fetchPeaksByProject(db: D1Database): Promise<Map<string, PeakReferrer[]>> {
+  const entries = await Promise.all(
+    CONFIG.projects.map(async (p): Promise<readonly [string, PeakReferrer[]]> => [p.name, await getPeakReferrers(db, p.repo)] as const)
+  );
+  return new Map(entries);
+}
+
+// Which channel a post event was published on. The explicit link that the
+// owner set on a matrix cell (project_channels.post_id) is authoritative;
+// channelForPostUrl only fills in for posts that were registered but never
+// linked to a cell, which is most of them.
+function channelForEvent(event: ImpactEvent, channelIdByPostId: Map<number, string>): Channel | undefined {
+  if (event.kind !== "post") return undefined;
+  const linked = event.postId != null ? channelIdByPostId.get(event.postId) : undefined;
+  if (linked) {
+    const byId = CHANNELS.find(c => c.id === linked);
+    if (byId) return byId;
+  }
+  return event.url ? channelForPostUrl(event.url) : undefined;
+}
+
+// Attaches the referrer-backed verdict to each row. See AttributionVerdict in
+// src/impact/attribute.ts for why the window numbers alone are not an answer.
+function attachAttribution(
+  impacts: EventImpact[],
+  peaksByProject: Map<string, PeakReferrer[]>,
+  channelIdByPostId: Map<number, string>
+): EventImpact[] {
+  return impacts.map(i => {
+    const channel = channelForEvent(i.event, channelIdByPostId);
+    const peaks = peaksByProject.get(i.event.project) ?? [];
+    const reading = channel ? referredTrafficFor(channel, peaks, i.event.date) : undefined;
+    return { ...i, attribution: attributionFor(i.event.kind, channel, reading) };
+  });
+}
+
 // GET /api/impact (below) and /impact's SSR page (src/ui/pages.ts's
 // renderImpact) both read this directly.
 export async function buildImpact(env: Env): Promise<EventImpact[]> {
   const db = env.DB;
-  const { postRows, todoInputs } = await fetchEventInputs(db);
+  const [{ postRows, todoInputs }, dataByProject, peaksByProject, channelRows] = await Promise.all([
+    fetchEventInputs(db),
+    fetchImpactDataByProject(db),
+    fetchPeaksByProject(db),
+    listProjectChannels(db)
+  ]);
   const events = buildEvents(postRows, todoInputs);
-  const dataByProject = await fetchImpactDataByProject(db);
-  return computeImpacts(events, dataByProject);
+  const channelIdByPostId = new Map<number, string>();
+  for (const r of channelRows) if (r.postId != null) channelIdByPostId.set(r.postId, r.channelId);
+  return attachAttribution(computeImpacts(events, dataByProject), peaksByProject, channelIdByPostId);
+}
+
+// Views each channel has been measured referring, summed across the fleet —
+// the proof term in suggestPairs's ranking.
+//
+// Built from getPeakReferrers, so each project contributes that channel's best
+// observed 14-day reading rather than a lifetime total: a floor, not a sum of
+// everything it ever sent. That is the right direction to be wrong in for a
+// ranking signal, and the UI labels it 实测引流 rather than a total.
+//
+// A channel with no declared referrer hosts (referredTrafficFor returns
+// undefined) contributes nothing and stays unproven, which is correct: it is
+// unobservable, not ineffective.
+function provenViewsByChannel(peaksByProject: Map<string, PeakReferrer[]>): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const peaks of peaksByProject.values()) {
+    for (const channel of CHANNELS) {
+      const referred = referredTrafficFor(channel, peaks);
+      if (!referred || referred.views <= 0) continue;
+      out.set(channel.id, (out.get(channel.id) ?? 0) + referred.views);
+    }
+  }
+  return out;
 }
 
 // Keyed by posts.id — used by buildMatrix below to attach a MatrixEffect to
@@ -388,10 +458,11 @@ export async function buildOverview(env: Env): Promise<Overview> {
     getTopOpenTodos(db, TOP_TODOS_LIMIT)
   ]);
   const projects = await Promise.all(CONFIG.projects.map(p => fetchProjectSummary(db, p, allPosts)));
-  const suggestions = suggestPairs(CONFIG.projects, toCoverage(coverageRows));
 
-  const peaksByProject = new Map<string, PeakReferrer[]>();
-  for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
+  // Peaks are read before the suggestions, not after: the ranking now needs
+  // them (proven referral outranks tag fit — see suggestPairs).
+  const peaksByProject = await fetchPeaksByProject(db);
+  const suggestions = suggestPairs(CONFIG.projects, toCoverage(coverageRows), provenViewsByChannel(peaksByProject));
 
   const workers = await getWorkerTotals(db, WORKER_WINDOW_DAYS);
   const sites = await getSiteTotals(db, SITE_PV_WINDOW_DAYS);
@@ -545,7 +616,6 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
   const db = env.DB;
   const rawCoverage = await listProjectChannels(db);
   const coverage = toCoverage(rawCoverage);
-  const suggestions = suggestPairs(CONFIG.projects, coverage);
 
   // The impact fetch (buildImpact runs the full events + per-project
   // repo_daily/star_history pipeline) is only worth its cost when there's at
@@ -555,8 +625,8 @@ export async function buildMatrix(env: Env): Promise<MatrixData> {
 
   // One query per project rather than one per cell: the peak-referrer set is a
   // property of the repo, and every channel row for that project reads from it.
-  const peaksByProject = new Map<string, PeakReferrer[]>();
-  for (const p of CONFIG.projects) peaksByProject.set(p.name, await getPeakReferrers(db, p.repo));
+  const peaksByProject = await fetchPeaksByProject(db);
+  const suggestions = suggestPairs(CONFIG.projects, coverage, provenViewsByChannel(peaksByProject));
 
   // Post publish dates, needed to tell "referred nobody" from "posted before we
   // started watching" (see ReferredTraffic.predatesCoverage).

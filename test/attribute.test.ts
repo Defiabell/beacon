@@ -4,6 +4,7 @@ import {
   buildEvents,
   computeImpact,
   computeImpacts,
+  attributionFor,
   type ImpactEvent
 } from "../src/impact/attribute";
 import type { RepoDaily } from "../src/types";
@@ -288,5 +289,58 @@ describe("acceptance: shotsync 08-09 positive impact vs nightide 07-27 near-zero
     expect(impact.after.views).toBe(37); // 6+5+5+6+4+6+5
     expect(Math.abs(impact.after.views - impact.before.views)).toBeLessThanOrEqual(2);
     expect(impact.after.starsDelta).toBe(0);
+  });
+});
+
+describe("attributionFor", () => {
+  const channel = { id: "ruanyf-weekly", name: "阮一峰科技爱好者周刊（issue 自荐）" };
+  const reading = (views: number, extra: Partial<{ uniques: number; sharedHost: boolean; predatesCoverage: boolean }> = {}) => ({
+    views,
+    uniques: extra.uniques ?? views,
+    sharedHost: extra.sharedHost ?? false,
+    predatesCoverage: extra.predatesCoverage ?? false
+  });
+
+  it("credits a channel that actually referred people, carrying the referred numbers", () => {
+    const a = attributionFor("post", channel, reading(369, { uniques: 227 }));
+    expect(a.verdict).toBe("referred");
+    expect(a.views).toBe(369);
+    expect(a.uniques).toBe(227);
+    expect(a.channelId).toBe("ruanyf-weekly");
+  });
+
+  // The defect this whole type exists for: an observable channel that referred
+  // nobody must not inherit the window's numbers. Two of yixi's three 09-05
+  // self-submissions were in exactly this state while the page showed each of
+  // them "+38 stars".
+  it("refuses to credit an observable channel that referred nobody", () => {
+    const a = attributionFor("post", channel, reading(0));
+    expect(a.verdict).toBe("no-referral");
+    expect(a.views).toBe(0);
+  });
+
+  it("separates 'cannot be observed' from 'referred nobody'", () => {
+    // referredTrafficFor returns undefined when the channel declares no
+    // referrer hosts at all (GitHubDaily publishes via 微博/公众号).
+    expect(attributionFor("post", channel, undefined).verdict).toBe("unobservable");
+    // ...and so does a post we could not resolve to any channel.
+    expect(attributionFor("post", undefined, reading(999)).verdict).toBe("unobservable");
+  });
+
+  it("flags a post published before referrer coverage began rather than reading it as zero", () => {
+    const a = attributionFor("post", channel, reading(0, { predatesCoverage: true }));
+    expect(a.verdict).toBe("predates-coverage");
+  });
+
+  it("never treats a finished todo as a distribution act", () => {
+    // A "set a social preview image" todo was being shown as +47 stars purely
+    // because it was done during someone else's spike.
+    expect(attributionFor("todo", undefined, undefined).verdict).toBe("not-a-channel");
+    expect(attributionFor("todo", channel, reading(999)).verdict).toBe("not-a-channel");
+  });
+
+  it("carries the shared-host caveat through every verdict that has a reading", () => {
+    expect(attributionFor("post", channel, reading(20, { sharedHost: true })).sharedHost).toBe(true);
+    expect(attributionFor("post", channel, reading(0, { sharedHost: true })).sharedHost).toBe(true);
   });
 });

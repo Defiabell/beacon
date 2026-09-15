@@ -214,12 +214,35 @@ describe("GET /api/overview", () => {
     expect(body.topTodos.every(t => t.status === "open")).toBe(true);
   });
 
-  it("suggestions: delegates to suggestPairs with the seeded coverage, excluding the posted pairing", async () => {
+  // Asserts the contract, not a re-run of suggestPairs against the same inputs:
+  // the previous version of this test recomputed the expected array with the
+  // production function and compared the two, which passes by construction and
+  // said nothing about the ranking. It also broke the moment the ranking gained
+  // its proof term, for a reason that was not a defect.
+  it("suggestions: excludes pairings already posted", async () => {
     const res = await call("GET", "/api/overview");
     const body = await res!.json<Overview>();
-    const expected = suggestPairs(CONFIG.projects, [{ project: "nightide", channelId: "v2ex", status: "posted" }]);
-    expect(body.suggestions).toEqual(expected);
     expect(body.suggestions.some(s => s.project === "nightide" && s.channelId === "v2ex")).toBe(false);
+    expect(body.suggestions.length).toBeGreaterThan(0);
+  });
+
+  // The seeded referrer_snapshot gives nightide 20 views from reddit.com and 10
+  // from news.ycombinator.com, so the reddit channels and show-hn are the only
+  // ones carrying measured proof — and proof outranks tag fit, including over a
+  // higher-scoring unproven pairing.
+  it("suggestions: channels with measured referrals rank above unproven ones", async () => {
+    const res = await call("GET", "/api/overview");
+    const body = await res!.json<Overview>();
+    const proven = body.suggestions.filter(s => s.provenViews > 0);
+    expect(proven.length).toBeGreaterThan(0);
+    expect(proven.every(s => ["show-hn", "r-sideproject", "r-webgames", "r-selfhosted", "r-macapps"].includes(s.channelId))).toBe(true);
+    // Descending by proof first, then by fit — checked pairwise so a future
+    // comparator change fails here rather than silently reordering the page.
+    for (let i = 1; i < body.suggestions.length; i++) {
+      const prev = body.suggestions[i - 1];
+      const cur = body.suggestions[i];
+      expect(prev.provenViews > cur.provenViews || (prev.provenViews === cur.provenViews && prev.score >= cur.score)).toBe(true);
+    }
   });
 
   it("sources: reflects source_runs", async () => {

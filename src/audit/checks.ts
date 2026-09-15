@@ -7,6 +7,9 @@ export interface RepoAuditInput {
   // to `meta.homepage` which is what GitHub's repo settings actually report —
   // the `homepage` check compares the two to catch a forgotten sync.
   configHomepage: string | null;
+  // From src/config.ts. "all-rights-reserved" makes the LICENSE check n/a —
+  // see checkLicense.
+  licensePolicy?: "open" | "all-rights-reserved";
   meta: {
     description: string | null;
     topics: string[];
@@ -50,13 +53,33 @@ function checkTopics(input: RepoAuditInput): CheckResult {
   };
 }
 
+// GitHub hands back a license object with key "other" whenever licensee cannot
+// match LICENSE to a known license, which happens the moment anything is
+// appended to the standard text. The repo then shows no license badge and drops
+// out of `license:` search filters — the file is there and does none of the work
+// it was added to do. Checking `!== null` passed all three of this fleet's repos
+// that were in exactly that state (reading-room, geshuo, nightide), so the check
+// has to look at the key, not at the object's existence.
+const UNIDENTIFIED_LICENSE_KEYS = new Set(["other", "no-license"]);
+
 function checkLicense(input: RepoAuditInput): CheckResult {
-  const pass = input.meta.license !== null;
+  // A repo that is closed on purpose can never satisfy "GitHub identifies the
+  // license", so failing it would mint a todo that can only be closed by
+  // relicensing. n/a is the honest status: the check does not apply.
+  if (input.licensePolicy === "all-rights-reserved") {
+    return { checkId: "license", status: "na", priority: 2, detail: "all-rights-reserved by design" };
+  }
+  const key = input.meta.license?.key ?? null;
+  const pass = key !== null && !UNIDENTIFIED_LICENSE_KEYS.has(key);
   return {
     checkId: "license",
     status: pass ? "pass" : "fail",
     priority: 2,
-    detail: pass ? `license: ${input.meta.license!.key}` : "no license"
+    detail: pass
+      ? `license: ${key}`
+      : key === null
+        ? "no license"
+        : `LICENSE present but GitHub identifies it as "${key}" — the standard text was modified or appended to, so no license badge and no license: search hit`
   };
 }
 
@@ -165,8 +188,13 @@ export function todoTitle(checkId: string, input: RepoAuditInput): string {
       return `给 ${input.project} 补一句 ≥20 字符的 GitHub description`;
     case "topics":
       return `给 ${input.project} 加至少 3 个 topics 标签`;
+    // One title for both failure modes (no file, and a file GitHub can't
+    // identify). Branching the wording on input.meta would make the title a
+    // function of current state, and insertTodoIfNew/closeTodoByTitle key on
+    // the title — a repo moving between the two states would then orphan its
+    // old open todo instead of closing it.
     case "license":
-      return `给 ${input.project} 加 LICENSE（建议 MIT）`;
+      return `给 ${input.project} 配一个 GitHub 能识别的 LICENSE（建议 MIT，原文别改）`;
     case "readme-english-intro":
       return `在 ${input.project} README 首屏加英文一句话简介`;
     case "readme-visual":

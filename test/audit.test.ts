@@ -78,6 +78,27 @@ describe("runRepoChecks", () => {
     expect(result.priority).toBe(2);
   });
 
+  // GitHub reports key "other" (spdx NOASSERTION) whenever licensee cannot match
+  // the file — which is what appending anything to the standard MIT text does.
+  // Three of the fleet's repos were in that state while passing the old
+  // `license !== null` check, so their repo pages carried no license badge.
+  it("license: fails when GitHub cannot identify the file, even though one exists", () => {
+    const input = golden();
+    input.meta = { ...input.meta, license: { key: "other" } };
+    const result = byId(runRepoChecks(input)).license;
+    expect(result.status).toBe("fail");
+    expect(result.detail).toContain("other");
+  });
+
+  it("license: n/a for a repo that is all-rights-reserved on purpose", () => {
+    const input = golden();
+    input.licensePolicy = "all-rights-reserved";
+    input.meta = { ...input.meta, license: { key: "other" } };
+    // Failing this would raise a todo whose only fix is relicensing a repo the
+    // owner deliberately kept closed (nightide).
+    expect(byId(runRepoChecks(input)).license.status).toBe("na");
+  });
+
   it("readme-english-intro: fails when no line in the first 40 has >=30 ASCII letters", () => {
     const input = golden();
     input.readme = "# 项目\n\n这是一个纯中文的项目介绍，完全没有任何英文长句。\n";
@@ -158,7 +179,7 @@ describe("todoTitle", () => {
     const input = golden();
     expect(todoTitle("description", input)).toBe(`给 ${input.project} 补一句 ≥20 字符的 GitHub description`);
     expect(todoTitle("topics", input)).toBe(`给 ${input.project} 加至少 3 个 topics 标签`);
-    expect(todoTitle("license", input)).toBe(`给 ${input.project} 加 LICENSE（建议 MIT）`);
+    expect(todoTitle("license", input)).toBe(`给 ${input.project} 配一个 GitHub 能识别的 LICENSE（建议 MIT，原文别改）`);
     expect(todoTitle("readme-english-intro", input)).toBe(`在 ${input.project} README 首屏加英文一句话简介`);
     expect(todoTitle("readme-visual", input)).toBe(`给 ${input.project} README 加截图或 GIF`);
     expect(todoTitle("release-assets", input)).toBe(`把 ${input.project} 预编译产物挂到 GitHub Releases`);

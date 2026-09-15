@@ -4,7 +4,8 @@ import {
   fitScore,
   suggestPairs,
   referrerMatchesChannel,
-  channelHasSharedReferrerHost
+  channelHasSharedReferrerHost,
+  channelForPostUrl
 } from "../src/channels";
 import type { ChannelKind } from "../src/channels";
 import { CONFIG } from "../src/config";
@@ -125,5 +126,53 @@ describe("referrer hosts", () => {
     // trending and search surfaces.
     expect(byId("githubdaily").referrerHosts).toEqual([]);
     expect(byId("awesome-mac").referrerHosts).toEqual([]);
+  });
+});
+
+describe("channelForPostUrl", () => {
+  it("resolves a post on a host only one channel uses", () => {
+    expect(channelForPostUrl("https://www.v2ex.com/t/1239805")?.id).toBe("v2ex");
+  });
+
+  // The case that made this function necessary: five channels publish under
+  // github.com, so matching on host alone credited whichever one CHANNELS
+  // happened to list first. yixi's three 自荐 issue all live there.
+  it("disambiguates channels that share github.com by owner/repo", () => {
+    expect(channelForPostUrl("https://github.com/ruanyf/weekly/issues/11508")?.id).toBe("ruanyf-weekly");
+    expect(channelForPostUrl("https://github.com/521xueweihan/HelloGitHub/issues/3642")?.id).toBe("hellogithub");
+    expect(channelForPostUrl("https://github.com/GitHubDaily/GitHubDaily/issues/1067")?.id).toBe("githubdaily");
+    expect(channelForPostUrl("https://github.com/tw93/weekly/discussions/22")?.id).toBe("tw93-weekly");
+  });
+
+  it("returns undefined for a github.com URL no channel claims", () => {
+    expect(channelForPostUrl("https://github.com/Defiabell/beacon/issues/1")).toBeUndefined();
+  });
+
+  it("returns undefined for an unknown host and for a malformed URL", () => {
+    expect(channelForPostUrl("https://example.com/post/1")).toBeUndefined();
+    expect(channelForPostUrl("not a url")).toBeUndefined();
+  });
+});
+
+describe("suggestPairs ranking", () => {
+  const projects = [{ name: "p", repo: "o/p", tags: ["tool", "web", "zh", "en", "macos", "selfhosted", "ai", "game"] }];
+
+  it("ranks a proven channel above a better-fitting unproven one", () => {
+    // Give the proof to whichever channel scores worst, so fit alone would put
+    // it last and only the proof term can lift it.
+    const scored = CHANNELS.map(c => ({ c, score: fitScore(projects[0], c) })).filter(x => x.score > 0);
+    const worst = scored.reduce((a, b) => (a.score <= b.score ? a : b)).c;
+    const best = scored.reduce((a, b) => (a.score >= b.score ? a : b)).c;
+    expect(fitScore(projects[0], worst)).toBeLessThan(fitScore(projects[0], best));
+
+    const ranked = suggestPairs(projects, [], new Map([[worst.id, 500]]));
+    expect(ranked[0].channelId).toBe(worst.id);
+    expect(ranked[0].provenViews).toBe(500);
+  });
+
+  it("leaves unproven channels ordered by fit, and defaults provenViews to 0", () => {
+    const ranked = suggestPairs(projects, []);
+    expect(ranked.every(s => s.provenViews === 0)).toBe(true);
+    for (let i = 1; i < ranked.length; i++) expect(ranked[i - 1].score).toBeGreaterThanOrEqual(ranked[i].score);
   });
 });
