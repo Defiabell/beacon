@@ -332,6 +332,17 @@ describe("attributionFor", () => {
     expect(a.verdict).toBe("predates-coverage");
   });
 
+  // Live data caught this: beacon began snapshotting yixi's referrers six days
+  // after its 09-05 submissions, so predatesCoverage was set — but
+  // ruanyifeng.com was right there in the snapshot with 369 views. Checking the
+  // flag before the reading reported "unknowable" for the single event on the
+  // page that could actually be proven.
+  it("keeps a non-zero reading even when coverage started after the post", () => {
+    const a = attributionFor("post", channel, reading(369, { uniques: 227, predatesCoverage: true }));
+    expect(a.verdict).toBe("referred");
+    expect(a.views).toBe(369);
+  });
+
   it("never treats a finished todo as a distribution act", () => {
     // A "set a social preview image" todo was being shown as +47 stars purely
     // because it was done during someone else's spike.

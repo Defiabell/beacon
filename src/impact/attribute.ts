@@ -168,19 +168,28 @@ export function attributionFor(
   // undefined reading == the channel declares no referrer hosts at all, which
   // referredTrafficFor signals by returning undefined rather than zeroes.
   if (!reading) return { verdict: "unobservable", ...named, ...none };
+  // Order matters: a non-zero reading is checked BEFORE predatesCoverage.
+  // predatesCoverage exists to stop a *zero* being read as "referred nobody"
+  // when the truth is "we were not watching yet" — it says nothing against
+  // traffic we did observe. beacon only started snapshotting yixi's referrers
+  // on 2026-09-11, six days after its 09-05 submissions, yet ruanyifeng.com
+  // sits in that snapshot with 369 views: the channel demonstrably referred
+  // people. Checking the flag first threw that evidence away and reported
+  // "unknowable" for the one event on the page that was actually provable.
+  // Late coverage can only make the number a floor, never make it false.
+  if (reading.views > 0) {
+    return {
+      verdict: "referred",
+      ...named,
+      views: reading.views,
+      uniques: reading.uniques,
+      sharedHost: reading.sharedHost
+    };
+  }
   if (reading.predatesCoverage) {
     return { verdict: "predates-coverage", ...named, ...none, sharedHost: reading.sharedHost };
   }
-  if (reading.views <= 0) {
-    return { verdict: "no-referral", ...named, ...none, sharedHost: reading.sharedHost };
-  }
-  return {
-    verdict: "referred",
-    ...named,
-    views: reading.views,
-    uniques: reading.uniques,
-    sharedHost: reading.sharedHost
-  };
+  return { verdict: "no-referral", ...named, ...none, sharedHost: reading.sharedHost };
 }
 
 export interface EventImpact {
