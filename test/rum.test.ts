@@ -106,14 +106,14 @@ describe("site_daily storage", () => {
     expect(row).toEqual({ pageviews: 17, visitors: 3 });
   });
 
-  it("totals a trailing window measured from the newest row, not from today", async () => {
+  it("totals a fixed calendar window ending yesterday", async () => {
     await upsertSiteDaily(env.DB, [
       { site: "busy.test", date: "2026-02-10", pageviews: 100, visitors: 10 },
       { site: "busy.test", date: "2026-02-09", pageviews: 50, visitors: 5 },
       { site: "busy.test", date: "2026-02-01", pageviews: 999, visitors: 99 }, // outside a 7-day window
       { site: "quiet.test", date: "2026-02-10", pageviews: 3, visitors: 1 }
     ]);
-    const totals = await getSiteTotals(env.DB, 7);
+    const totals = await getSiteTotals(env.DB, 7, "2026-02-11");
     const busy = totals.find(t => t.site === "busy.test")!;
     expect(busy.pageviews).toBe(150); // 2026-02-01 excluded
     expect(busy.visitors).toBe(15);

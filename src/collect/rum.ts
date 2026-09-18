@@ -108,5 +108,20 @@ export async function fetchRumDaily(
     const first = errors[0] as { message?: unknown };
     throw new Error(`cloudflare rum error: ${typeof first?.message === "string" ? first.message : "unknown"}`);
   }
+  const accounts = (payload as { data?: { viewer?: { accounts?: Record<string, unknown>[] } } }).data?.viewer?.accounts;
+  if (!Array.isArray(accounts) || accounts.length !== 1 ||
+      sites.some((_, i) => !Array.isArray(accounts[0]?.[`s${i}`]))) {
+    throw new Error("cloudflare rum response missing account or site data");
+  }
+  for (let i = 0; i < sites.length; i++) {
+    for (const raw of accounts[0][`s${i}`] as RumRow[]) {
+      if (typeof raw?.dimensions?.date !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(raw.dimensions.date) ||
+          typeof raw.count !== "number" || !Number.isFinite(raw.count) ||
+          typeof raw.sum?.visits !== "number" || !Number.isFinite(raw.sum.visits)) {
+        throw new Error("cloudflare rum response contains invalid daily data");
+      }
+    }
+  }
   return normalizeRum(payload, sites);
 }

@@ -10,7 +10,7 @@
 
 beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织：
 
-- **Measure（度量）** —— 每日定时任务（`wrangler.toml` 里的 `0 1 * * *`，UTC）拉取每个被跟踪仓库的 GitHub 流量/clone/star 历史（`src/collect/github.ts`），刷新你在 V2EX / LinuxDO / Hacker News / Reddit 上登记过的每篇帖子的指标（`src/collect/posts.ts`），读取本 Cloudflare 账户下每个 Worker（`src/collect/cloudflare.ts`）和每个 Pages 项目 Functions（`src/collect/pages.ts`——单独一个 GraphQL 数据集加一次 REST 项目查询，因为 Pages Functions 的流量对 Worker 那个数据集完全不可见）各自的请求量，拉取 `src/config.ts` 里配置站点的 RUM 浏览量（`src/collect/rum.ts`），以及可选的 GoatCounter 站点每日 pageview（`src/collect/goatcounter.ts`）。
+- **Measure（度量）** —— 每日定时任务（UTC 01:00 采 GitHub、01:10 采帖子、01:20 采网站统计，见 `wrangler.toml`）拉取每个被跟踪仓库的 GitHub 流量/clone/star 历史（`src/collect/github.ts`），刷新你在 V2EX / LinuxDO / Hacker News / Reddit 上登记过的每篇帖子的指标（`src/collect/posts.ts`），读取本 Cloudflare 账户下每个 Worker（`src/collect/cloudflare.ts`）和每个 Pages 项目 Functions（`src/collect/pages.ts`——单独一个 GraphQL 数据集加一次 REST 项目查询，因为 Pages Functions 的流量对 Worker 那个数据集完全不可见）各自的请求量，拉取 `src/config.ts` 里配置站点的 RUM 浏览量（`src/collect/rum.ts`），以及可选的 GoatCounter 站点每日 pageview（`src/collect/goatcounter.ts`）。
 - **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 9 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 
@@ -66,19 +66,22 @@ npm run deploy
 curl -X POST https://beacon.<你的子域>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 
-# 立即跑一次今天的采集（从明天起每日定时任务会自动做同样的事，且拆成两次触发——见下文）。
-# 不带 ?sources= 的单次调用会在一次 invocation 里跑完全部四个采集器
-# （github/posts/goatcounter/audit），在多仓库的情况下这已经接近 Workers
-# 免费档「每次 invocation 最多 50 个 subrequest」的上限。下面两步式调用
-# 才是手动触发的安全做法——和定时任务本身的拆分（wrangler.toml 的两条
-# cron + src/index.ts）一致：
-curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=github,posts,goatcounter" \
+# 每组单独请求；sources 不能省略或跨组混用。审计分片分别运行。
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=github" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
-curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=audit" \
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=posts" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=goatcounter,cloudflare,pages,rum" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=audit&shard=0" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=audit&shard=1" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
 打开 `https://beacon.<你的子域>.workers.dev/`——总览页此时应该已经显示出 `src/config.ts` 里每个项目的 star/流量数据。
+
+定时配置仍只有三条 cron：`0,10,20 1 * * *` 按分钟分组采集，`30 1 * * *` 和 `40 1 * * *` 分别执行审计分片。每组拥有独立请求预算。统计窗口使用最近 N 个完整 UTC 日，不含今天；Cloudflare 和 GoatCounter 每次重新采集最近三个完整日。没有记录的指标返回 `null`／显示缺失，不能当成零。成功采集确认的空日期才可记为零；部分覆盖和失败来源会明确标记。
 
 ## GoatCounter（可选）
 
@@ -145,22 +148,19 @@ curl -X PUT https://beacon.<子域>.workers.dev/api/admin/todos \
 
 **手动触发一次采集或回填**（和上面部署步骤里用的是同一组路由）：
 
+每次必须指定 `sources`：`github`、`posts`、`audit` 各自单独运行；`goatcounter,cloudflare,pages,rum` 可以选任意子集。省略、空值、未知来源或跨组组合返回 400，且不会启动采集。上面的部署步骤列出完整调用。审计响应中的 `auditShards` 是分片总数，按 `shard=0` 到 `auditShards - 1` 分别调用。
+
 ```bash
-# 一次调用跑完全部四个采集器——多仓库场景下已接近免费档 subrequest 上限
-# （更安全的两步式调用见上面的部署步骤）
-curl -X POST https://beacon.<子域>.workers.dev/api/admin/collect \
+curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=pages,rum" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 [{"source":"github","ok":true}, {"source":"posts","ok":true}, ...]
+# -> 200 {"reports":[{"source":"pages","ok":true},{"source":"rum","ok":true}],"auditShards":2,"ranShard":0}
 
-# ?sources=<逗号分隔的名字> 把这次采集限定到 github/posts/goatcounter/audit
-# 的子集；传了未知名字会 400
-curl -X POST "https://beacon.<子域>.workers.dev/api/admin/collect?sources=audit" \
+curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=audit&shard=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 [{"source":"audit","ok":true}]
+# -> 200 {"reports":[{"source":"audit","ok":true}],"auditShards":2,"ranShard":1}
 
-curl -X POST https://beacon.<子域>.workers.dev/api/admin/backfill \
+curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 {"repos": 4, "failures": []}
 ```
 
 ### 只读接口

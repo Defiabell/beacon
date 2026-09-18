@@ -14,7 +14,7 @@ describe("db", () => {
   it("upsertRepoDaily is idempotent and updates in place", async () => {
     await db.upsertRepoDaily(DB, [row()]);
     await db.upsertRepoDaily(DB, [row({ views: 20 })]);
-    const series = await db.getRepoSeries(DB, "Defiabell/shotsync", 30);
+    const series = await db.getRepoSeries(DB, "Defiabell/shotsync", 30, "2026-08-02");
     expect(series).toHaveLength(1);
     expect(series[0].views).toBe(20);
   });
@@ -38,13 +38,13 @@ describe("db", () => {
   it("upsertRepoDaily accepts an empty rows array without throwing", async () => {
     await db.upsertRepoDaily(DB, []);
   });
-  it("getRepoSeries returns only the most recent `days` rows, ascending by date", async () => {
+  it("getRepoSeries uses a fixed calendar window, ascending by date", async () => {
     await db.upsertRepoDaily(DB, [
       row({ repo: "Defiabell/days-limit", date: "2026-07-30", views: 1 }),
       row({ repo: "Defiabell/days-limit", date: "2026-07-31", views: 2 }),
       row({ repo: "Defiabell/days-limit", date: "2026-08-01", views: 3 })
     ]);
-    const series = await db.getRepoSeries(DB, "Defiabell/days-limit", 2);
+    const series = await db.getRepoSeries(DB, "Defiabell/days-limit", 2, "2026-08-02");
     expect(series.map(s => s.date)).toEqual(["2026-07-31", "2026-08-01"]);
   });
 

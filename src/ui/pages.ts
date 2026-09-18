@@ -1,3 +1,4 @@
+import type { MetricCoverage } from "../metrics";
 // Five SSR page renderers, one per route in Task 12's router. Every function
 // returns a complete HTML document (via layout.page) ready to hand back in a
 // Response. All dynamic (DB-, GitHub-, or user-submitted-) text passes through
@@ -103,12 +104,13 @@ function fmtDate(s: string): string {
 
 // ---- overview -------------------------------------------------------------
 
-function freshnessBar(sources: SourceRun[]): string {
+function freshnessBar(allSources: SourceRun[]): string {
+  const sources = allSources.filter(s => !s.source.startsWith("github:"));
   if (sources.length === 0) {
     return `<p class="fresh"><span class="dot"></span>暂无数据更新记录</p>`;
   }
   const latest = sources.reduce((a, b) => (a.lastRunAt > b.lastRunAt ? a : b));
-  const parts = sources.map(s => `${esc(SOURCE_NAMES[s.source] ?? s.source)} ${s.ok ? "✓" : "✗"}`).join(" · ");
+  const parts = sources.map(s => `${esc(SOURCE_NAMES[s.source] ?? s.source)} ${s.error === "not configured" || s.error === "no sites configured" ? "未配置" : s.ok ? "✓" : "✗"}`).join(" · ");
   return `<p class="fresh"><span class="dot"></span>数据更新于 ${esc(fmtDateTime(latest.lastRunAt))} · ${parts}</p>`;
 }
 
@@ -170,17 +172,24 @@ function renderActionItem(item: ActionItem): string {
 // ProjectDetail.repoSeries/starSeries) — deliberately no sparkline on the
 // overview cards, per task-12-brief; the project detail page has the real
 // chart. See task-12-report.md.
+function coverageNote(c?: MetricCoverage): string {
+  if (!c) return '';
+  const labels = { complete: '数据完整', partial: '部分数据', missing: '数据缺失', failed: '采集失败', stale: '采集已过期', unconfigured: '未配置' };
+  return `<span class="src">${labels[c.status]} · 已记录 ${c.observedDays}/${c.expectedDays} 天 · ${esc(c.start)} 至 ${esc(c.end)}（UTC）</span>`;
+}
+
 function projectCard(p: ProjectSummary): string {
   const tags = projectTagsLabel(p.project);
   const referrerChip = p.topReferrers.length > 0 ? `<span class="chip">来源 ${esc(p.topReferrers[0].referrer)}</span>` : "";
   // Review item 1 (design doc §3): clones14d is human-only — a nonzero
   // machineClones14d is disclosed right next to it, never folded in.
-  const machineNote = p.machineClones14d > 0 ? `（另有 ${p.machineClones14d} 次机器 clone）` : "";
+  const machineNote = (p.machineClones14d ?? 0) > 0 ? `（另有 ${p.machineClones14d} 次机器 clone）` : "";
   return `<div class="card">
 <h3><a href="/p/${encodeURIComponent(p.project)}">${esc(p.project)}</a></h3>
 <p class="repo">${esc(p.repo)}${tags ? " · " + esc(tags) : ""}</p>
-<div class="stat-row"><span class="big">${p.stars}</span><span class="unit">stars</span><span class="delta">${deltaArrow(p.starsDelta7d)} 本周</span></div>
-<div class="foot"><span class="chip">views 14d ${p.views14d}</span><span class="chip">clones 14d ${p.clones14d}${machineNote}</span><span class="chip">帖子 ${p.postCount}</span>${referrerChip}</div>
+<div class="stat-row"><span class="big">${fmtNum(p.stars)}</span><span class="unit">stars</span><span class="delta">${p.starsDelta7d === null ? "—" : deltaArrow(p.starsDelta7d)} 快照内近 7 天</span></div>
+<div class="foot"><span class="chip">views 14d ${fmtNum(p.views14d)}</span><span class="chip">clones 14d ${fmtNum(p.clones14d)}${machineNote}</span><span class="chip">帖子 ${p.postCount}</span>${referrerChip}</div>
+${coverageNote(p.trafficCoverage)}${p.starsAsOf ? `<p class="sub">Star 快照：${esc(p.starsAsOf)}</p>` : ""}
 </div>`;
 }
 
@@ -231,12 +240,11 @@ ${unknown}
 //
 // 一个条目对应一个 hostname，这是 Web Analytics 划分站点的方式 ——
 // defiabell.github.io 一行同时包含博客和 /nightide/ 下的游戏。
-function sitesSection(sites: SiteTotal[]): string {
+function sitesSection(sites: (SiteTotal & { coverage?: MetricCoverage })[]): string {
   if (sites.length === 0) {
     return `<section class="actions"><h2>网站访问量</h2>
 <p class="sub">暂无数据。Cloudflare Web Analytics 采集尚未运行，或站点刚接入还没攒够一天。</p></section>`;
   }
-  const days = Math.max(...sites.map(s => s.days));
   const rows = sites
     .map(s => {
       const cfg = CONFIG.sites.find(c => c.host === s.site);
@@ -244,13 +252,13 @@ function sitesSection(sites: SiteTotal[]): string {
       return (
         `<li><span class="proj" title="${esc(s.site)}">${esc(label)}</span>` +
         `<span class="src">${esc(s.site)}</span>` +
-        `<span class="effect">${s.pageviews} 次浏览 / ${s.visitors} 次访问</span></li>`
+        `<span class="effect">${fmtNum(s.pageviews)} 次浏览 / ${fmtNum(s.visitors)} 次访问</span>${coverageNote(s.coverage)}</li>`
       );
     })
     .join("");
   return `<section class="actions">
 <h2>网站访问量</h2>
-<p class="sub">近 ${days} 天，来自 Cloudflare Web Analytics。「浏览」是页面加载次数，「访问」是会话数——都不是独立访客数。一行一个域名，defiabell.github.io 含博客与 /nightide/ 游戏。</p>
+<p class="sub">最近 7 个完整 UTC 日，来自 Cloudflare Web Analytics；缺失日期不补作零，部分数据仅为已记录合计。「浏览」是页面加载次数，「访问」是会话数——都不是独立访客数。一行一个域名，defiabell.github.io 含博客与 /nightide/ 游戏。</p>
 <ul class="plain">${rows}</ul>
 </section>`;
 }
@@ -271,20 +279,19 @@ function workersSection(workers: WorkerTotal[]): string {
     return `<section class="actions"><h2>自有服务请求量</h2>
 <p class="sub">暂无数据。Cloudflare 采集尚未运行或未配置（需要 CLOUDFLARE_ACCOUNT_ID 与 CLOUDFLARE_API_TOKEN）。</p></section>`;
   }
-  const days = Math.max(...workers.map(w => w.days));
   const rows = workers
     .map(w => {
       const divisor = MEASURED_REQUESTS_PER_VISIT[w.script];
-      const est = divisor
+      const est = divisor && w.requests !== null && (!w.coverage || w.coverage.status === "complete")
         ? `<span class="src" title="按实测每次首屏访问 ${divisor} 个请求粗算；回访命中缓存会更少，点开大图会更多，且请求数不区分爬虫">约 ${Math.round(w.requests / divisor)} 次访问</span>`
         : "";
-      const err = w.errors > 0 ? `<span class="src">错误 ${w.errors}</span>` : "";
-      return `<li><span class="proj">${esc(w.script)}</span>${est}${err}<span class="effect">${w.requests}</span></li>`;
+      const err = (w.errors ?? 0) > 0 ? `<span class="src">错误 ${w.errors}</span>` : "";
+      return `<li><span class="proj">${esc(w.script)}</span>${est}${err}<span class="effect">${fmtNum(w.requests)}</span>${coverageNote(w.coverage)}</li>`;
     })
     .join("");
   return `<section class="actions">
 <h2>自有服务请求量</h2>
-<p class="sub">近 ${days} 天 Cloudflare Worker 的<strong>请求数</strong>——不是访问数，一次首屏访问会打多个请求。只有实测过换算比的脚本才给访问估算。</p>
+<p class="sub">最近 7 个完整 UTC 日 Cloudflare Worker / Pages Functions 的<strong>请求数</strong>——不是访问数，一次首屏访问会打多个请求。只有实测过换算比的脚本才给访问估算。</p>
 <ul class="plain">${rows}</ul>
 </section>`;
 }
@@ -387,7 +394,7 @@ export function renderProject(name: string, d: ProjectDetail, authed: boolean): 
   // projectCard) — the clone curve below stays raw/unfiltered (design doc §3
   // never touches repo_daily itself), this note just labels what the "clones
   // · 14d" figure right above it actually counts.
-  const machineCloneNote = s.machineClones14d > 0 ? `<p class="sub">另有 ${s.machineClones14d} 次机器 clone</p>` : "";
+  const machineCloneNote = (s.machineClones14d ?? 0) > 0 ? `<p class="sub">另有 ${s.machineClones14d} 次机器 clone</p>` : "";
 
   const body = `${header}
 <main>
@@ -399,15 +406,17 @@ export function renderProject(name: string, d: ProjectDetail, authed: boolean): 
 <div class="card">
 <h2>Star 增长</h2>
 <p class="sub">累计 star 数（stargazer 时间戳回填）</p>
-<div class="hero"><div><div class="n">${s.stars}</div><div class="l">stars</div></div><div><div class="delta">${deltaArrow(s.starsDelta7d)}</div><div class="l">近 7 天</div></div></div>
+<div class="hero"><div><div class="n">${fmtNum(s.stars)}</div><div class="l">stars</div></div><div><div class="delta">${s.starsDelta7d === null ? "—" : deltaArrow(s.starsDelta7d)}</div><div class="l">快照内近 7 天</div></div></div>
+${s.starsAsOf ? `<p class="sub">Star 快照：${esc(s.starsAsOf)}</p>` : ""}
 ${starSpark || `<p class="sub">暂无数据</p>`}
 </div>
 <div class="card">
-<h2>仓库流量 · 近 ${d.repoSeries.length} 天</h2>
-<p class="sub">GitHub traffic（每日采集累积）</p>
+<h2>仓库流量 · 最近 90 个完整 UTC 日</h2>
+<p class="sub">GitHub traffic；下方数字为最近 14 个完整 UTC 日，曲线为 90 日内已有记录。曲线按有记录日期排列，缺失日期不视为零。</p>
+${coverageNote(s.trafficCoverage)}
 <div class="two">
-<div><div class="hero"><div><div class="n">${s.views14d}</div><div class="l">views · 14d</div></div></div>${viewsSpark}</div>
-<div><div class="hero"><div><div class="n">${s.clones14d}</div><div class="l">clones · 14d</div></div></div>${machineCloneNote}${clonesSpark}</div>
+<div><div class="hero"><div><div class="n">${fmtNum(s.views14d)}</div><div class="l">views · 14d</div></div></div>${viewsSpark}</div>
+<div><div class="hero"><div><div class="n">${fmtNum(s.clones14d)}</div><div class="l">clones · 14d</div></div></div>${machineCloneNote}${clonesSpark}</div>
 </div>
 </div>
 <div class="card">

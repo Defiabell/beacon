@@ -1,3 +1,4 @@
+import { metricCoverage, type MetricCoverage } from "../metrics";
 import type { Env, RepoDaily, ReferrerRow, Post, PostMetrics, Todo, CheckResult, SourceRun } from "../types";
 import type { ProjectConfig } from "../config";
 import { CONFIG } from "../config";
@@ -28,7 +29,6 @@ import {
   listSourceRuns,
   listTodos,
   getTopOpenTodos,
-  getSitePvSum,
   listAuditResults,
   type PostForImpact,
   type PeakReferrer,
@@ -57,17 +57,19 @@ const WORKER_WINDOW_DAYS = 7;
 export interface ProjectSummary {
   project: string;
   repo: string;
-  stars: number;
-  starsDelta7d: number;
-  views14d: number;
+  stars: number | null;
+  starsDelta7d: number | null;
+  starsAsOf?: string | null;
+  trafficCoverage?: MetricCoverage;
+  views14d: number | null;
   // Human-only clone count (classifyDay-filtered — design doc §3), NOT a raw
   // sum of repo_daily.clones. Review item 1: the raw sum used to be what this
   // field held, which silently folded bot/CI clone spikes into the number a
   // reader sees labeled "clones 14d" — nightide alone has 109 machine clones
   // in 14 days. machineClones14d (below) discloses that count separately; the
   // two are never added together anywhere in the UI.
-  clones14d: number;
-  machineClones14d: number;
+  clones14d: number | null;
+  machineClones14d: number | null;
   postCount: number;
   topReferrers: ReferrerRow[];
 }
@@ -80,9 +82,11 @@ export interface ProjectSummary {
 // word "约".
 export interface WorkerTotal {
   script: string;
-  requests: number;
-  errors: number;
+  requests: number | null;
+  errors: number | null;
   days: number;
+  lastDate?: string | null;
+  coverage?: MetricCoverage;
 }
 
 export interface Overview {
@@ -90,10 +94,10 @@ export interface Overview {
   topTodos: Todo[];
   suggestions: Suggestion[];
   sources: SourceRun[];
-  sitePv7d: number;
+  sitePv7d: number | null;
   surfaces: SurfaceBreakdown;
   workers: WorkerTotal[];
-  sites: SiteTotal[];
+  sites: (SiteTotal & { coverage?: MetricCoverage })[];
 }
 
 export interface PostWithMetrics {
@@ -251,24 +255,12 @@ export interface MatrixData {
   suggestions: Suggestion[];
 }
 
-// starsDelta7d = latest star count minus the count at (or nearest before) 7
-// days prior to the latest recorded date. `series` is ascending by date (as
-// returned by getStarSeries). When fewer than 7 days of history exist — no row
-// has a date <= the 7-days-back target — the earliest row is used as the
-// baseline instead, per the task-11 spec.
-// Exported (beyond the required public.ts contract) so this pure branch logic
-// can be unit-tested directly, the same way src/audit/checks.ts's pure
-// functions are tested without going through the HTTP layer.
-export function computeStarsDelta(series: { date: string; stars: number }[]): { stars: number; starsDelta7d: number } {
-  if (series.length === 0) return { stars: 0, starsDelta7d: 0 };
-  const latest = series[series.length - 1];
-  const targetDate = shiftDate(latest.date, -STAR_DELTA_WINDOW_DAYS);
-  let baseline = series[0];
-  for (const row of series) {
-    if (row.date <= targetDate) baseline = row;
-    else break;
-  }
-  return { stars: latest.stars, starsDelta7d: latest.stars - baseline.stars };
+// A seven-day delta requires both endpoint snapshots. Missing history is not zero.
+export function computeStarsDelta(series: { date: string; stars: number }[]): { stars: number | null; starsDelta7d: number | null } {
+  const latest = series.at(-1);
+  if (!latest) return { stars: null, starsDelta7d: null };
+  const baseline = series.find(row => row.date === shiftDate(latest.date, -STAR_DELTA_WINDOW_DAYS));
+  return { stars: latest.stars, starsDelta7d: baseline ? latest.stars - baseline.stars : null };
 }
 
 function computeProjectSummary(
@@ -276,7 +268,9 @@ function computeProjectSummary(
   starSeries: { date: string; stars: number }[],
   repoSeries: RepoDaily[],
   referrers: ReferrerRow[],
-  postCount: number
+  postCount: number,
+  today: string,
+  source?: SourceRun
 ): ProjectSummary {
   const { stars, starsDelta7d } = computeStarsDelta(starSeries);
   const views14d = repoSeries.reduce((sum, r) => sum + r.views, 0);
@@ -292,24 +286,26 @@ function computeProjectSummary(
   return {
     project: project.name,
     repo: project.repo,
-    stars,
-    starsDelta7d,
-    views14d,
-    clones14d: humanClones,
-    machineClones14d: machineClones,
+    stars: starSeries.length ? stars : null,
+    starsDelta7d: starSeries.length ? starsDelta7d : null,
+    starsAsOf: starSeries.at(-1)?.date ?? null,
+    trafficCoverage: metricCoverage(REPO_SERIES_SUMMARY_DAYS, repoSeries.length, repoSeries.at(-1)?.date ?? null, today, source),
+    views14d: repoSeries.length ? views14d : null,
+    clones14d: repoSeries.length ? humanClones : null,
+    machineClones14d: repoSeries.length ? machineClones : null,
     postCount,
     topReferrers: referrers.slice(0, TOP_REFERRERS_LIMIT)
   };
 }
 
-async function fetchProjectSummary(db: D1Database, project: ProjectConfig, allPosts: Post[]): Promise<ProjectSummary> {
+async function fetchProjectSummary(db: D1Database, project: ProjectConfig, allPosts: Post[], today: string, sources: SourceRun[]): Promise<ProjectSummary> {
   const [starSeries, repoSeries, referrers] = await Promise.all([
     getStarSeries(db, project.repo),
-    getRepoSeries(db, project.repo, REPO_SERIES_SUMMARY_DAYS),
+    getRepoSeries(db, project.repo, REPO_SERIES_SUMMARY_DAYS, today),
     getLatestReferrers(db, project.repo)
   ]);
   const postCount = allPosts.filter(p => p.project === project.name).length;
-  return computeProjectSummary(project, starSeries, repoSeries, referrers, postCount);
+  return computeProjectSummary(project, starSeries, repoSeries, referrers, postCount, today, sources.find(s => s.source === `github:${project.repo}`));
 }
 
 // listProjectChannels also carries postId, which the public coverage/matrix
@@ -450,22 +446,31 @@ function toMatrixEffect(impact: EventImpact): MatrixEffect {
 
 export async function buildOverview(env: Env): Promise<Overview> {
   const db = env.DB;
-  const [allPosts, coverageRows, sources, sitePv7d, topTodos] = await Promise.all([
+  const today = utcToday();
+  const [allPosts, coverageRows, sources, topTodos] = await Promise.all([
     listPosts(db),
     listProjectChannels(db),
     listSourceRuns(db),
-    getSitePvSum(db, SITE_PV_WINDOW_DAYS),
     getTopOpenTodos(db, TOP_TODOS_LIMIT)
   ]);
-  const projects = await Promise.all(CONFIG.projects.map(p => fetchProjectSummary(db, p, allPosts)));
+  const projects = await Promise.all(CONFIG.projects.map(p => fetchProjectSummary(db, p, allPosts, today, sources)));
 
   // Peaks are read before the suggestions, not after: the ranking now needs
   // them (proven referral outranks tag fit — see suggestPairs).
   const peaksByProject = await fetchPeaksByProject(db);
   const suggestions = suggestPairs(CONFIG.projects, toCoverage(coverageRows), provenViewsByChannel(peaksByProject));
 
-  const workers = await getWorkerTotals(db, WORKER_WINDOW_DAYS);
-  const sites = await getSiteTotals(db, SITE_PV_WINDOW_DAYS);
+  const workerRows = await getWorkerTotals(db, WORKER_WINDOW_DAYS, today);
+  const workers = workerRows.map(w => ({ ...w, coverage: metricCoverage(WORKER_WINDOW_DAYS, w.days, w.lastDate, today,
+    sources.find(s => s.source === (w.script.endsWith('.pages.dev') || w.script.startsWith('pages-worker--') ? 'pages' : 'cloudflare'))) }));
+  const siteRows = await getSiteTotals(db, SITE_PV_WINDOW_DAYS, today);
+  for (const site of CONFIG.sites) {
+    if (!siteRows.some(s => s.site === site.host)) siteRows.push({ site: site.host, pageviews: null, visitors: null, days: 0, lastDate: null });
+  }
+  const sites = siteRows.map(s => ({ ...s, coverage: metricCoverage(SITE_PV_WINDOW_DAYS, s.days, s.lastDate, today,
+    sources.find(r => r.source === (CONFIG.sites.some(c => c.host === s.site) ? 'rum' : 'goatcounter'))) }));
+  const sitePv7d = sites.length > 0 && sites.every(s => s.coverage.status === 'complete')
+    ? sites.reduce((total, s) => total + (s.pageviews ?? 0), 0) : null;
   return {
     projects,
     topTodos,
@@ -485,22 +490,23 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   if (!project) return null;
 
   const db = env.DB;
-  const [starSeries, repoSeriesSummary, repoSeries, repoDailyAll, referrers, allPosts, audit, eventInputs] = await Promise.all([
+  const today = utcToday();
+  const [starSeries, repoSeriesSummary, repoSeries, repoDailyAll, referrers, allPosts, audit, eventInputs, sources] = await Promise.all([
     getStarSeries(db, project.repo),
-    getRepoSeries(db, project.repo, REPO_SERIES_SUMMARY_DAYS),
-    getRepoSeries(db, project.repo, REPO_SERIES_DETAIL_DAYS),
+    getRepoSeries(db, project.repo, REPO_SERIES_SUMMARY_DAYS, today),
+    getRepoSeries(db, project.repo, REPO_SERIES_DETAIL_DAYS, today),
     getAllRepoDaily(db, project.repo),
     getLatestReferrers(db, project.repo),
     listPosts(db),
     listAuditResults(db, project.name),
-    fetchEventInputs(db)
+    fetchEventInputs(db),
+    listSourceRuns(db)
   ]);
   const projectPosts = allPosts.filter(p => p.project === project.name);
-  const today = utcToday();
   const posts: PostWithMetrics[] = await Promise.all(
     projectPosts.map(post => withStaleness(db, post, today))
   );
-  const summary = computeProjectSummary(project, starSeries, repoSeriesSummary, referrers, projectPosts.length);
+  const summary = computeProjectSummary(project, starSeries, repoSeriesSummary, referrers, projectPosts.length, today, sources.find(s => s.source === `github:${project.repo}`));
 
   // starSeries above is already full (unbounded) history — getStarSeries has
   // no `days` limit, unlike getRepoSeries — so it's reused as-is for impact;
