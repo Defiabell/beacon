@@ -1,6 +1,5 @@
 import { runDailyCollect } from "./collect/run";
-import { AUDIT_CRONS } from "./schedule";
-import type { SourceName } from "./collect/run";
+import { scheduledCollection } from "./schedule";
 import type { Env } from "./types";
 import { handleAdmin } from "./api/admin";
 import { handleUi } from "./api/ui";
@@ -89,10 +88,7 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
   return null;
 }
 
-// Scheduled routing lives in src/schedule.ts: the audit is split across
-// AUDIT_CRONS (one shard per cron) and everything else runs in the single cheap
-// invocation. The split exists to keep each invocation under the free tier's
-// 50-subrequests-per-invocation cap; see src/audit/run.ts auditShards.
+// Every collection group and audit shard has its own subrequest budget.
 
 export default {
   async fetch(req: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -166,17 +162,9 @@ export default {
     }
   },
   async scheduled(event: ScheduledController, env: Env, ctx: ExecutionContext): Promise<void> {
-    // "cloudflare" and "rum" join the cheap group as a single GraphQL POST
-    // each; "pages" costs two subrequests (a GraphQL POST plus the Pages
-    // project list) — still comfortably under the free tier's cap alongside
-    // the rest of this group.
-    // An audit cron identifies itself by position in AUDIT_CRONS, which is also
-    // its shard index; -1 means this is the cheap-sources invocation.
-    const auditShard = AUDIT_CRONS.indexOf(event.cron);
-    const sources: SourceName[] =
-      auditShard >= 0 ? ["audit"] : ["github", "posts", "goatcounter", "cloudflare", "pages", "rum"];
+    const { sources, auditShard } = scheduledCollection(event.cron, event.scheduledTime);
     ctx.waitUntil(
-      runDailyCollect(env, new Date(event.scheduledTime), undefined, sources, Math.max(auditShard, 0)).then(
+      runDailyCollect(env, new Date(event.scheduledTime), undefined, sources, auditShard).then(
         () => undefined
       )
     );

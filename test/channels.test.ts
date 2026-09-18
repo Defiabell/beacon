@@ -51,6 +51,7 @@ describe("channels", () => {
       lang: "en" as const,
       tags: ["macos"],
       kind: "post" as const,
+      referrerHosts: [],
       howTo: "带截图，并说明免费还是付费。"
     };
     expect(fitScore(p, c)).toBe(1);

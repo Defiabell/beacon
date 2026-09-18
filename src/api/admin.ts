@@ -165,24 +165,24 @@ function isSourceName(s: string): s is SourceName {
   return (ALL_SOURCES as string[]).includes(s);
 }
 
-// `?sources=github,posts` restricts a manual collect run to a subset — same
-// mechanism the split cron uses (src/collect/run.ts, src/index.ts). Omitted
-// entirely -> all four, matching the pre-existing default behavior; an
-// unknown name 400s rather than silently being dropped, since the caller
-// probably mistyped a source and would otherwise wonder why it never ran.
-// See README's "near the subrequest cap" note for why the two-step
-// (`?sources=github,posts,goatcounter` then `?sources=audit`) form is the
-// recommended way to run a full manual collect by hand.
+// Manual calls obey the same invocation boundaries as the daily schedule.
+// Analytics sources may be selected together; GitHub, posts and each audit
+// shard must run in separate requests to preserve their subrequest budgets.
+const SOURCE_GROUP_HELP = "choose one group: github | posts | goatcounter,cloudflare,pages,rum (any subset) | audit";
+const ANALYTICS_SOURCES: SourceName[] = ["goatcounter", "cloudflare", "pages", "rum"];
+
 function parseSourcesParam(url: URL): SourceName[] | { error: string } {
   const raw = url.searchParams.get("sources");
-  if (raw === null) return ALL_SOURCES;
-  const names = raw
-    .split(",")
-    .map(s => s.trim())
-    .filter(s => s.length > 0);
+  if (!raw?.trim()) return { error: `sources is required; ${SOURCE_GROUP_HELP}` };
+  const names = [...new Set(raw.split(",").map(s => s.trim()).filter(Boolean))];
+  if (names.length === 0) return { error: `sources must not be empty; ${SOURCE_GROUP_HELP}` };
   const unknown = names.filter(n => !isSourceName(n));
-  if (unknown.length > 0) return { error: `unknown source(s): ${unknown.join(", ")} (known: ${ALL_SOURCES.join(", ")})` };
-  return names as SourceName[];
+  if (unknown.length > 0) return { error: `unknown source(s): ${unknown.join(", ")}; ${SOURCE_GROUP_HELP}` };
+  const sources = names as SourceName[];
+  if (sources.length > 1 && !sources.every(source => ANALYTICS_SOURCES.includes(source))) {
+    return { error: `sources from different groups must run in separate requests; ${SOURCE_GROUP_HELP}` };
+  }
+  return sources;
 }
 
 // `?shard=N` picks which audit shard to run. It defaults to 0 rather than

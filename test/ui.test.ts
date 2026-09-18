@@ -104,7 +104,7 @@ describe("renderOverview", () => {
     const overview: Overview = {
       projects: [summary(), summary({ project: "shotsync", repo: "Defiabell/shotsync" })],
       topTodos: [{ id: 1, project: "nightide", source: "audit", title: "fix readme link", priority: 1, status: "open" }],
-      suggestions: [{ project: "shotsync", channelId: "v2ex", channelName: "V2EX", score: 3 }],
+      suggestions: [{ project: "shotsync", channelId: "v2ex", channelName: "V2EX", score: 3, provenViews: 0 }],
       sources: [{ source: "github", lastRunAt: "2026-08-01T01:00:00Z", ok: true, error: null }],
       sitePv7d: 100, surfaces: NO_SURFACES, workers: [], sites: []
     };
@@ -122,7 +122,7 @@ describe("renderOverview", () => {
     const overview: Overview = {
       projects: [],
       topTodos: [],
-      suggestions: [{ project: "shotsync", channelId: "show-hn", channelName: "Show HN", score: 4 }],
+      suggestions: [{ project: "shotsync", channelId: "show-hn", channelName: "Show HN", score: 4, provenViews: 0 }],
       sources: [],
       sitePv7d: 0, surfaces: NO_SURFACES, workers: [], sites: []
     };
@@ -407,7 +407,7 @@ describe("renderMatrix", () => {
       { project: "nightide", channelId: "v2ex", status: "posted" },
       { project: "nightide", channelId: "jike", status: "planned" }
     ],
-    suggestions: [{ project: "nightide", channelId: "hn", channelName: "Show HN", score: 2 }]
+    suggestions: [{ project: "nightide", channelId: "hn", channelName: "Show HN", score: 2, provenViews: 0 }]
   };
 
   // Every assertion below is scoped to the fragment it's about (<thead>, or the

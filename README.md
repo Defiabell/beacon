@@ -10,7 +10,7 @@ A growth engine for your side projects — self-hosted on Cloudflare's free tier
 
 beacon is a single **Cloudflare Worker + D1 database**, organized around three layers:
 
-- **Measure** — a daily cron (`0 1 * * *` UTC, see `wrangler.toml`) pulls each tracked repo's GitHub traffic/clones/star history (`src/collect/github.ts`), refreshes metrics for every post you've registered on V2EX/LinuxDO/Hacker News/Reddit/GitHub issues & PRs (`src/collect/posts.ts`), reads this Cloudflare account's own request counts for every Worker (`src/collect/cloudflare.ts`) and every Pages project's Functions (`src/collect/pages.ts` — a separate GraphQL dataset and REST project lookup, since Pages Functions traffic is invisible to the Worker one), pulls RUM pageviews for the sites you list in `src/config.ts` (`src/collect/rum.ts`), and — optionally — daily pageviews from a GoatCounter site (`src/collect/goatcounter.ts`).
+- **Measure** — a daily collection schedule (GitHub at 01:00 UTC, posts at 01:10, analytics at 01:20; see `wrangler.toml`) pulls each tracked repo's GitHub traffic/clones/star history (`src/collect/github.ts`), refreshes metrics for every post you've registered on V2EX/LinuxDO/Hacker News/Reddit/GitHub issues & PRs (`src/collect/posts.ts`), reads this Cloudflare account's own request counts for every Worker (`src/collect/cloudflare.ts`) and every Pages project's Functions (`src/collect/pages.ts` — a separate GraphQL dataset and REST project lookup, since Pages Functions traffic is invisible to the Worker one), pulls RUM pageviews for the sites you list in `src/config.ts` (`src/collect/rum.ts`), and — optionally — daily pageviews from a GoatCounter site (`src/collect/goatcounter.ts`).
 - **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 9 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced), and a channel-coverage matrix (`src/channels.ts`) scores each project against 17 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
 - **Act** — every failed audit check and every high-scoring unposted channel becomes a row in `todos`, surfaced on the dashboard and via `/api/todos` — a concrete next action instead of just a report.
 
@@ -70,20 +70,23 @@ Finally, seed history and run the first collection:
 curl -X POST https://beacon.<your-subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 
-# runs today's collectors immediately (the daily cron does the same thing
-# automatically from tomorrow on, split across two invocations — see below).
-# A single call with no ?sources= runs all four collectors (github, posts,
-# goatcounter, audit) in one invocation, which on a multi-repo fleet gets
-# close to the Workers free tier's 50-subrequests-per-invocation cap. The
-# two-step form below is the safe way to do this by hand — same split the
-# cron itself uses (wrangler.toml's two crons + src/index.ts):
-curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=github,posts,goatcounter" \
+# Run each group separately; sources is required and groups cannot be mixed.
+# Run each audit shard in a separate request.
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=github" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
-curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=audit" \
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=posts" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=goatcounter,cloudflare,pages,rum" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=audit&shard=0" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=audit&shard=1" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
 Open `https://beacon.<your-subdomain>.workers.dev/` — the overview should now show stars/traffic for every project in `src/config.ts`.
+
+The configuration still uses three Cron Triggers: `0,10,20 1 * * *` selects the collection group by minute, and `30 1 * * *` / `40 1 * * *` run the audit shards. Each invocation has its own request budget. Metric windows cover the latest N complete UTC days, excluding today; Cloudflare and GoatCounter collection refreshes the last three complete days. Missing measurements return `null` and display as missing, not zero. Only confirmed empty days from successful collection become zero; partial coverage and source failures are marked explicitly.
 
 ## GoatCounter (optional)
 
@@ -150,22 +153,19 @@ curl -X PUT https://beacon.<subdomain>.workers.dev/api/admin/todos \
 
 **Trigger a collection or backfill manually** (same routes used in the deploy steps above):
 
-```bash
-# all four collectors in one call — near the free tier's subrequest cap on a
-# multi-repo fleet (see the deploy steps above for the safer two-step form)
-curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/collect \
-  -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 [{"source":"github","ok":true}, {"source":"posts","ok":true}, ...]
+Each request must specify `sources`: run `github`, `posts`, and `audit` separately; any subset of `goatcounter,cloudflare,pages,rum` may run together. Omitted, empty, unknown, or cross-group selections return 400 before collecting. The deploy steps above show the full sequence. The audit response includes `auditShards`; call each index from `shard=0` through `auditShards - 1`.
 
-# ?sources=<comma-separated names> restricts the run to a subset of
-# github/posts/goatcounter/audit; an unknown name 400s
-curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=audit" \
+```bash
+curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=pages,rum" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 [{"source":"audit","ok":true}]
+# -> 200 {"reports":[{"source":"pages","ok":true},{"source":"rum","ok":true}],"auditShards":2,"ranShard":0}
+
+curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=audit&shard=1" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+# -> 200 {"reports":[{"source":"audit","ok":true}],"auditShards":2,"ranShard":1}
 
 curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 {"repos": 4, "failures": []}
 ```
 
 ### Reading the data back

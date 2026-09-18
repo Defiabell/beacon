@@ -207,48 +207,38 @@ export async function upsertWorkerDaily(db: D1Database, rows: WorkerDaily[]): Pr
   await db.batch(rows.map(r => stmt.bind(r.script, r.date, r.requests, r.errors, r.subrequests)));
 }
 
-// Per-script totals over the trailing `days` window, busiest first. `days` is
-// applied against the newest date present rather than today's date, so the
-// window does not silently shrink to nothing when a collection run is missed.
+// Metrics use complete UTC calendar days; a failed run never moves the window.
 export async function getWorkerTotals(
-  db: D1Database,
-  days: number
-): Promise<{ script: string; requests: number; errors: number; days: number }[]> {
-  const res = await db
-    .prepare(
-      `SELECT script, SUM(requests) AS requests, SUM(errors) AS errors, COUNT(*) AS days
-       FROM worker_daily
-       WHERE date > date((SELECT MAX(date) FROM worker_daily), '-' || ?1 || ' days')
-       GROUP BY script ORDER BY requests DESC`
-    )
-    .bind(days)
-    .all<{ script: string; requests: number; errors: number; days: number }>();
+  db: D1Database, days: number, today = new Date().toISOString().slice(0, 10)
+): Promise<{ script: string; requests: number | null; errors: number | null; days: number; lastDate: string | null }[]> {
+  const res = await db.prepare(
+    `SELECT known.script, SUM(d.requests) AS requests, SUM(d.errors) AS errors,
+            COUNT(d.date) AS days, MAX(d.date) AS lastDate
+     FROM (SELECT DISTINCT script FROM worker_daily) known
+     LEFT JOIN worker_daily d ON d.script=known.script
+       AND d.date >= date(?2, '-' || ?1 || ' days') AND d.date < ?2
+     GROUP BY known.script ORDER BY requests DESC`
+  ).bind(days, today).all<{ script: string; requests: number | null; errors: number | null; days: number; lastDate: string | null }>();
   return res.results;
 }
 
 export interface SiteTotal {
   site: string;
-  pageviews: number;
-  visitors: number;
+  pageviews: number | null;
+  visitors: number | null;
   days: number;
-  lastDate: string;
+  lastDate: string | null;
 }
 
-// Per-site totals over the trailing `days` window, busiest first. Like
-// getWorkerTotals, the window is measured from the newest row present rather
-// than from today, so a missed collection run shrinks the sample instead of
-// silently reporting zero.
-export async function getSiteTotals(db: D1Database, days: number): Promise<SiteTotal[]> {
-  const res = await db
-    .prepare(
-      `SELECT site, SUM(pageviews) AS pageviews, SUM(visitors) AS visitors,
-              COUNT(*) AS days, MAX(date) AS lastDate
-       FROM site_daily
-       WHERE date > date((SELECT MAX(date) FROM site_daily), '-' || ?1 || ' days')
-       GROUP BY site ORDER BY pageviews DESC`
-    )
-    .bind(days)
-    .all<SiteTotal>();
+export async function getSiteTotals(db: D1Database, days: number, today = new Date().toISOString().slice(0, 10)): Promise<SiteTotal[]> {
+  const res = await db.prepare(
+    `SELECT known.site, SUM(d.pageviews) AS pageviews, SUM(d.visitors) AS visitors,
+            COUNT(d.date) AS days, MAX(d.date) AS lastDate
+     FROM (SELECT DISTINCT site FROM site_daily) known
+     LEFT JOIN site_daily d ON d.site=known.site
+       AND d.date >= date(?2, '-' || ?1 || ' days') AND d.date < ?2
+     GROUP BY known.site ORDER BY pageviews DESC`
+  ).bind(days, today).all<SiteTotal>();
   return res.results;
 }
 
@@ -270,20 +260,13 @@ export async function listAuditResults(
   return res.results;
 }
 
-// Sum of pageviews over the most recent `days` *recorded* dates (same "most
-// recent N rows, not trailing N calendar days" semantics as getRepoSeries —
-// see its comment). COALESCE guards the empty-table case: SUM() over zero
-// rows is NULL, not 0.
-export async function getSitePvSum(db: D1Database, days: number): Promise<number> {
-  const row = await db
-    .prepare(
-      `SELECT COALESCE(SUM(pageviews), 0) AS total FROM site_daily WHERE date IN (
-         SELECT DISTINCT date FROM site_daily ORDER BY date DESC LIMIT ?1
-       )`
-    )
-    .bind(days)
-    .first<{ total: number }>();
-  return row?.total ?? 0;
+// No samples is null, never a fabricated zero.
+export async function getSitePvSum(db: D1Database, days: number, today = new Date().toISOString().slice(0, 10)): Promise<number | null> {
+  const row = await db.prepare(
+    `SELECT SUM(pageviews) AS total FROM site_daily
+     WHERE date >= date(?2, '-' || ?1 || ' days') AND date < ?2`
+  ).bind(days, today).first<{ total: number | null }>();
+  return row?.total ?? null;
 }
 
 export async function upsertAuditResults(
@@ -475,24 +458,18 @@ export async function listSourceRuns(db: D1Database): Promise<SourceRun[]> {
   return res.results.map(r => ({ source: r.source, lastRunAt: r.lastRunAt, ok: r.ok === 1, error: r.error }));
 }
 
-// `days` means "the most recent N recorded rows", not "trailing N calendar days" —
-// filtering by wall-clock date would under-return when the daily cron misses a run,
-// so we take the N latest dates present and sort them ascending for charting.
-export async function getRepoSeries(db: D1Database, repo: string, days: number): Promise<RepoDaily[]> {
-  const res = await db
-    .prepare(
-      `SELECT * FROM (
-         SELECT repo, date, views, unique_views AS uniqueViews, clones, unique_clones AS uniqueClones, stars, forks
-         FROM repo_daily WHERE repo=?1 ORDER BY date DESC LIMIT ?2
-       ) ORDER BY date ASC`
-    )
-    .bind(repo, days)
-    .all<RepoDaily>();
+// Missing dates stay missing. Never substitute older rows or include today's partial counts.
+export async function getRepoSeries(db: D1Database, repo: string, days: number, today = new Date().toISOString().slice(0, 10)): Promise<RepoDaily[]> {
+  const res = await db.prepare(
+    `SELECT repo, date, views, unique_views AS uniqueViews, clones, unique_clones AS uniqueClones, stars, forks
+     FROM repo_daily WHERE repo=?1 AND date >= date(?3, '-' || ?2 || ' days') AND date < ?3
+     ORDER BY date ASC`
+  ).bind(repo, days, today).all<RepoDaily>();
   return res.results;
 }
 
 // Every repo_daily row for `repo`, ascending by date, with no `days` limit —
-// unlike getRepoSeries (whose "most recent N rows" window suits a chart, not
+// unlike getRepoSeries (whose trailing calendar window suits a chart, not
 // attribution). The impact engine (src/impact/attribute.ts) needs the full
 // history because an event's before/after window can fall anywhere in it, not
 // just within the last N days. Mirrors getStarSeries's shape/semantics below.

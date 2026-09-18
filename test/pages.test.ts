@@ -210,7 +210,7 @@ describe("resolved rows in worker_daily storage", () => {
       ...pagesRows,
       { script: "yixi", date: "2026-09-08", requests: 19, errors: 0, subrequests: 0 }
     ]);
-    const totals = await getWorkerTotals(env.DB, 1);
+    const totals = await getWorkerTotals(env.DB, 1, "2026-09-09");
     const scripts = totals.map(t => t.script).sort();
     expect(scripts).toEqual(["yixi", "yixi-app.pages.dev"]);
     expect(totals.find(t => t.script === "yixi-app.pages.dev")!.requests).toBe(7585);

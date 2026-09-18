@@ -390,30 +390,26 @@ describe("PUT /api/admin/todos", () => {
 });
 
 describe("POST /api/admin/collect", () => {
-  it("runs the daily collector and returns its per-source reports", async () => {
-    const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
-    const res = await handleAdmin(req("POST", "/api/admin/collect"), env, "/api/admin/collect", alwaysNotFound);
-    expect(res.status).toBe(200);
-    const { reports } = await res.json<{ reports: { source: string; ok: boolean }[] }>();
-    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum"]);
+  it("rejects omitted, empty and cross-group selections before any collection", async () => {
+    let fetched = false;
+    const fetchFn: typeof fetch = async () => { fetched = true; return new Response("not found", { status: 404 }); };
+    for (const query of ["", "?sources=", "?sources=,", "?sources=github,posts", "?sources=github,rum", "?sources=posts,cloudflare", "?sources=audit,rum", "?sources=audit,github"]) {
+      const res = await handleAdmin(req("POST", `/api/admin/collect${query}`), env, "/api/admin/collect", fetchFn);
+      expect(res.status, query).toBe(400);
+      expect((await res.json<{ error: string }>()).error).toContain("choose one group");
+    }
+    expect(fetched).toBe(false);
+    expect(await db.listSourceRuns(env.DB)).toEqual([]);
   });
 
-  // C1: ?sources= lets a manual collect stay under the free-tier
-  // 50-subrequests-per-invocation cap (README's two-step curl workflow).
-  it("with ?sources=github,posts, runs only those two sources", async () => {
+  it("accepts each bounded group and analytics subsets", async () => {
     const alwaysNotFound: typeof fetch = async () => new Response("not found", { status: 404 });
-    const res = await handleAdmin(
-      req("POST", "/api/admin/collect?sources=github,posts"),
-      env,
-      "/api/admin/collect",
-      alwaysNotFound
-    );
-    expect(res.status).toBe(200);
-    const { reports } = await res.json<{ reports: { source: string; ok: boolean }[] }>();
-    expect(reports.map(r => r.source).sort()).toEqual(["github", "posts"]);
-
-    const sourceRuns = await db.listSourceRuns(env.DB);
-    expect(sourceRuns.map(r => r.source).sort()).toEqual(["github", "posts"]);
+    for (const names of [["github"], ["posts"], ["goatcounter", "cloudflare", "pages", "rum"], ["pages", "rum"]]) {
+      const res = await handleAdmin(req("POST", `/api/admin/collect?sources=${names.join(",")}`), env, "/api/admin/collect", alwaysNotFound);
+      expect(res.status).toBe(200);
+      const { reports } = await res.json<{ reports: { source: string; ok: boolean }[] }>();
+      expect(reports.map(report => report.source).sort()).toEqual([...names].sort());
+    }
   });
 
   it("with ?sources=audit, runs only audit", async () => {

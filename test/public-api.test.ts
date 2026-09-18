@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest";
 import { env } from "cloudflare:test";
 import * as db from "../src/db";
 import { CONFIG } from "../src/config";
@@ -50,9 +50,9 @@ function repoRow(repo: string, date: string, views: number, clones: number) {
 // exact hit on the 7-days-back target date). No DB involved — same style as
 // src/audit/checks.ts's pure functions being tested directly in audit.test.ts.
 describe("computeStarsDelta", () => {
-  it("a single-row series has no prior baseline to diff against -> delta 0", () => {
+  it("a single-row series has no prior baseline -> delta unavailable", () => {
     const result = computeStarsDelta([{ date: "2026-08-01", stars: 42 }]);
-    expect(result).toEqual({ stars: 42, starsDelta7d: 0 });
+    expect(result).toEqual({ stars: 42, starsDelta7d: null });
   });
 
   it("uses a row exactly at the 7-days-back target date as the baseline, not an earlier row", () => {
@@ -72,6 +72,8 @@ describe("computeStarsDelta", () => {
 // other describe block in this file leaves site_daily untouched, so that
 // ordering constraint is local to that one describe.
 beforeAll(async () => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date("2026-08-04T12:00:00Z"));
   // repo_daily: 3 days each for nightide + day-monitor; shotsync/screen-coach
   // get none, to exercise the "no data yet" defaults.
   await db.upsertRepoDaily(env.DB, [
@@ -179,7 +181,7 @@ describe("GET /api/overview", () => {
     const nightide = body.projects.find(p => p.project === "nightide")!;
     expect(nightide.repo).toBe(NIGHTIDE.repo);
     expect(nightide.stars).toBe(170);
-    expect(nightide.starsDelta7d).toBe(31); // 170 - 139 (nearest-before-target baseline, 07-27)
+    expect(nightide.starsDelta7d).toBeNull(); // 07-28 snapshot missing
     expect(nightide.views14d).toBe(45); // 10+15+20
     expect(nightide.clones14d).toBe(6); // 1+2+3
     expect(nightide.postCount).toBe(1);
@@ -193,16 +195,16 @@ describe("GET /api/overview", () => {
 
     const dayMonitor = body.projects.find(p => p.project === "day-monitor")!;
     expect(dayMonitor.stars).toBe(60);
-    expect(dayMonitor.starsDelta7d).toBe(10); // 60 - 50, fewer than 7 days of history -> earliest row
+    expect(dayMonitor.starsDelta7d).toBeNull(); // fewer than seven days of history
     expect(dayMonitor.views14d).toBe(21); // 5+7+9
     expect(dayMonitor.clones14d).toBe(2); // 0+1+1
     expect(dayMonitor.topReferrers).toEqual([]); // no referrer_snapshot rows at all
 
     const untouched = body.projects.find(p => p.project === "screen-coach")!;
-    expect(untouched.stars).toBe(0);
-    expect(untouched.starsDelta7d).toBe(0);
-    expect(untouched.views14d).toBe(0);
-    expect(untouched.clones14d).toBe(0);
+    expect(untouched.stars).toBeNull();
+    expect(untouched.starsDelta7d).toBeNull();
+    expect(untouched.views14d).toBeNull();
+    expect(untouched.clones14d).toBeNull();
     expect(untouched.postCount).toBe(0);
     expect(untouched.topReferrers).toEqual([]);
   });
@@ -527,13 +529,13 @@ describe("machine-clone disclosure (design doc §3 / review item 1)", () => {
 });
 
 describe("sitePv7d", () => {
-  it("is 0 when site_daily has no rows yet", async () => {
+  it("is null when site_daily has no rows yet", async () => {
     const res = await call("GET", "/api/overview");
     const body = await res!.json<Overview>();
-    expect(body.sitePv7d).toBe(0);
+    expect(body.sitePv7d).toBeNull();
   });
 
-  it("sums pageviews over only the 7 most recently recorded dates", async () => {
+  it("does not present a partial fleet as a complete seven-day total", async () => {
     const rows: [string, number][] = [
       ["2026-07-24", 100],
       ["2026-07-25", 101],
@@ -553,9 +555,10 @@ describe("sitePv7d", () => {
 
     const res = await call("GET", "/api/overview");
     const body = await res!.json<Overview>();
-    // most recent 7 dates: 07-27..08-02 -> 103+104+105+106+107+108+109 = 742
-    // (07-24/25/26 = 100+101+102 = 303 must be excluded)
-    expect(body.sitePv7d).toBe(742);
+    // Fixed 07-28..08-03 window; do not borrow 07-27 to fill the missing day.
+    expect(body.sitePv7d).toBeNull();
+    expect(body.sites.find(s => s.site === "defiabell")!.pageviews).toBe(639); // 07-28..08-02, 08-03 missing
+    expect(body.sites.find(s => s.site === "defiabell")!.coverage?.status).toBe("partial");
   });
 });
 
@@ -602,3 +605,5 @@ describe("metricsAreStale", () => {
     expect(metricsAreStale("2026-09-10", "2026-09-09")).toBe(false);
   });
 });
+
+afterAll(() => vi.useRealTimers());

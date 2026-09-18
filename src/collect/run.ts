@@ -46,33 +46,53 @@ async function runSource(db: D1Database, source: string, fn: () => Promise<Sourc
     : { source, ok: result.ok };
 }
 
+function datesEndingOn(date: string, days: number): string[] {
+  return Array.from({ length: days }, (_, i) => {
+    const day = new Date(`${date}T00:00:00Z`);
+    day.setUTCDate(day.getUTCDate() - days + 1 + i);
+    return day.toISOString().slice(0, 10);
+  });
+}
+
+function analyticsDates(date: string): string[] {
+  const yesterday = new Date(`${date}T00:00:00Z`);
+  yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+  return datesEndingOn(yesterday.toISOString().slice(0, 10), 3);
+}
+
 async function collectGithub(env: Env, date: string, fetchFn: FetchFn): Promise<SourceResult> {
   const failures: string[] = [];
   for (const project of CONFIG.projects) {
-    // Two stages, deliberately not one try block. The star count comes from
-    // public repo metadata; traffic needs the repo to be inside the token's
-    // fine-grained allowlist. Collapsing them meant a traffic 403 discarded a
-    // star count that had already been fetched, and the project rendered as 0
-    // stars — a number that looks like an answer. Now the star tally lands
-    // regardless, and only the traffic half is reported as failed.
+    let failure: string | undefined;
     let meta;
     try {
       meta = await fetchRepoMeta(env.GITHUB_TOKEN, project.repo, fetchFn);
       await upsertStarHistory(env.DB, project.repo, [{ date, stars: meta.stars }]);
     } catch (e) {
-      failures.push(`${project.repo}: ${e instanceof Error ? e.message : String(e)}`);
-      continue;
+      failure = `${project.repo}: ${e instanceof Error ? e.message : String(e)}`;
     }
-    try {
-      const traffic = await fetchRepoTraffic(env.GITHUB_TOKEN, project.repo, meta, fetchFn);
-      await upsertRepoDaily(env.DB, traffic.daily);
-      await replaceReferrerSnapshot(env.DB, project.repo, date, traffic.referrers);
-    } catch (e) {
-      // No repo_daily row is written on this path, and that is the point: a row
-      // of zeroes would assert "nobody visited today" when the truth is "we
-      // were not allowed to look". An absent row renders as no data.
-      failures.push(`${project.repo} traffic: ${e instanceof Error ? e.message : String(e)}`);
+    if (meta && !failure) {
+      try {
+        const traffic = await fetchRepoTraffic(env.GITHUB_TOKEN, project.repo, meta, fetchFn);
+        // Only a successful traffic response establishes zero for absent days.
+        // GitHub retains 14 days including today; never extrapolate beyond it.
+        const byDate = new Map(traffic.daily.map(row => [row.date, row]));
+        for (const day of datesEndingOn(date, 14)) {
+          if (!byDate.has(day)) byDate.set(day, {
+            repo: project.repo, date: day, views: 0, uniqueViews: 0,
+            clones: 0, uniqueClones: 0, stars: meta.stars, forks: meta.forks
+          });
+        }
+        // The API can also return the boundary day's real bucket (T-14).
+        // Preserve every measured row, but never invent an older zero.
+        await upsertRepoDaily(env.DB, [...byDate.values()]);
+        await replaceReferrerSnapshot(env.DB, project.repo, date, traffic.referrers);
+      } catch (e) {
+        failure = `${project.repo} traffic: ${e instanceof Error ? e.message : String(e)}`;
+      }
     }
+    await recordSourceRun(env.DB, `github:${project.repo}`, !failure, failure);
+    if (failure) failures.push(failure);
   }
   return failures.length > 0 ? { ok: false, error: failures.join("; ") } : { ok: true };
 }
@@ -96,7 +116,8 @@ async function collectGoatcounter(env: Env, date: string, fetchFn: FetchFn): Pro
   if (!env.GOATCOUNTER_SITE || !env.GOATCOUNTER_TOKEN) {
     return { ok: true, error: "not configured" };
   }
-  const rows = await fetchSiteDaily(env.GOATCOUNTER_SITE, env.GOATCOUNTER_TOKEN, date, date, fetchFn);
+  const dates = analyticsDates(date);
+  const rows = await fetchSiteDaily(env.GOATCOUNTER_SITE, env.GOATCOUNTER_TOKEN, dates[0], dates[2], fetchFn);
   await upsertSiteDaily(env.DB, rows);
   return { ok: true };
 }
@@ -108,13 +129,12 @@ async function collectCloudflare(env: Env, date: string, fetchFn: FetchFn): Prom
   // A 3-day window rather than just `date`: Cloudflare restates recent days as
   // data settles, and re-fetching them lets upsertWorkerDaily correct earlier
   // undercounts. It also self-heals a missed run without a separate backfill.
-  const start = new Date(`${date}T00:00:00Z`);
-  start.setUTCDate(start.getUTCDate() - 2);
+  const dates = analyticsDates(date);
   const rows = await fetchWorkerDaily(
     env.CLOUDFLARE_ACCOUNT_ID,
     env.CLOUDFLARE_API_TOKEN,
-    start.toISOString().slice(0, 10),
-    date,
+    dates[0],
+    dates[2],
     fetchFn
   );
   await upsertWorkerDaily(env.DB, rows);
@@ -131,19 +151,28 @@ async function collectPages(env: Env, date: string, fetchFn: FetchFn): Promise<S
   }
   // Same 3-day re-fetch window as collectCloudflare/collectRum, and for the
   // same reason: Cloudflare restates recent days as data settles.
-  const start = new Date(`${date}T00:00:00Z`);
-  start.setUTCDate(start.getUTCDate() - 2);
+  const dates = analyticsDates(date);
   const [rows, projects] = await Promise.all([
     fetchPagesFunctionsDaily(
       env.CLOUDFLARE_ACCOUNT_ID,
       env.CLOUDFLARE_API_TOKEN,
-      start.toISOString().slice(0, 10),
-      date,
+      dates[0],
+      dates[2],
       fetchFn
     ),
     fetchPagesProjects(env.CLOUDFLARE_ACCOUNT_ID, env.CLOUDFLARE_API_TOKEN, fetchFn)
   ]);
-  await upsertWorkerDaily(env.DB, resolvePagesFunctionsToWorkerDaily(rows, projects));
+  const daily = resolvePagesFunctionsToWorkerDaily(rows, projects);
+  // Only scripts present in Functions analytics are known to run Functions.
+  // A Pages project list alone also contains purely static sites.
+  const byKey = new Map(daily.map(row => [`${row.script}:${row.date}`, row]));
+  for (const script of new Set(daily.map(row => row.script))) {
+    for (const day of dates) {
+      const key = `${script}:${day}`;
+      if (!byKey.has(key)) byKey.set(key, { script, date: day, requests: 0, errors: 0, subrequests: 0 });
+    }
+  }
+  await upsertWorkerDaily(env.DB, [...byKey.values()]);
   return { ok: true };
 }
 
@@ -156,17 +185,23 @@ async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<Sou
   // recent days, and re-reading them lets the upsert correct earlier
   // undercounts and self-heal a missed run. All sites ride one aliased query,
   // so the whole fleet costs a single subrequest.
-  const start = new Date(`${date}T00:00:00Z`);
-  start.setUTCDate(start.getUTCDate() - 2);
+  const dates = analyticsDates(date);
   const rows = await fetchRumDaily(
     CONFIG.sites,
     env.CLOUDFLARE_ACCOUNT_ID,
     env.CLOUDFLARE_API_TOKEN,
-    start.toISOString().slice(0, 10),
-    date,
+    dates[0],
+    dates[2],
     fetchFn
   );
-  await upsertSiteDaily(env.DB, rows);
+  const byKey = new Map(rows.map(row => [`${row.site}:${row.date}`, row]));
+  for (const site of CONFIG.sites) {
+    for (const day of dates) {
+      const key = `${site.host}:${day}`;
+      if (!byKey.has(key)) byKey.set(key, { site: site.host, date: day, pageviews: 0, visitors: 0 });
+    }
+  }
+  await upsertSiteDaily(env.DB, [...byKey.values()]);
   return { ok: true };
 }
 
@@ -175,13 +210,9 @@ async function collectAudit(env: Env, fetchFn: FetchFn, shard: number): Promise<
   return { ok: true };
 }
 
-// `sources` (default: all four) lets a caller run only a subset — used to
-// split the daily cron across two invocations (see wrangler.toml / src/index.ts's
-// scheduled handler) and by the admin ?sources= query param (src/api/admin.ts),
-// both in service of staying under the Workers free tier's
-// 50-subrequests-per-invocation cap on a multi-repo fleet. recordSourceRun
-// behavior is unchanged: only the sources actually run get a source_runs row
-// written/updated this invocation.
+// Scheduled invocations select one bounded group (see schedule.ts). Admin
+// callers can still explicitly request a source subset. Only sources actually
+// run receive health records; GitHub additionally records per-repo health.
 export async function runDailyCollect(
   env: Env,
   now: Date,

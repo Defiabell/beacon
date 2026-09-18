@@ -94,16 +94,15 @@ describe("worker_daily storage", () => {
     expect(row).toEqual({ requests: 140, errors: 2 });
   });
 
-  it("totals a trailing window measured from the newest row, not from today", async () => {
-    // Anchoring on today would collapse the window to nothing after a missed
-    // collection run, silently reporting 0 traffic.
+  it("totals a fixed calendar window ending yesterday", async () => {
+    // Dates are explicit so missing runs never shift the window.
     await upsertWorkerDaily(env.DB, [
       { script: "busy", date: "2026-01-10", requests: 500, errors: 0, subrequests: 0 },
       { script: "busy", date: "2026-01-09", requests: 300, errors: 2, subrequests: 0 },
       { script: "busy", date: "2026-01-01", requests: 999, errors: 0, subrequests: 0 }, // outside a 7-day window
       { script: "quiet", date: "2026-01-10", requests: 4, errors: 0, subrequests: 0 }
     ]);
-    const totals = await getWorkerTotals(env.DB, 7);
+    const totals = await getWorkerTotals(env.DB, 7, "2026-01-11");
     const busy = totals.find(t => t.script === "busy")!;
     expect(busy.requests).toBe(800); // 500 + 300, the 2026-01-01 row excluded
     expect(busy.errors).toBe(2);

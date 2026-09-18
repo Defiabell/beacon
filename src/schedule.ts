@@ -1,22 +1,23 @@
-// Cron expressions, mirrored from wrangler.toml.
-//
-// wrangler.toml is the authority — the strings here must match it exactly, or
-// the scheduled handler falls through to the wrong branch. They are duplicated
-// because a Worker cannot read its own wrangler.toml at runtime, and routing on
-// the cron string is the only way one Worker can tell its scheduled invocations
-// apart.
+import type { SourceName } from "./collect/run";
 
-// The cheap sources (github/posts/goatcounter/cloudflare/rum) all run together
-// in one invocation; none of them scales with fleet size the way the audit does.
-export const CHEAP_CRON = "0 1 * * *";
-
-// The audit is sharded across these invocations — one shard each, in order.
-// Every shard runs every day, so no project waits more than a day to be
-// re-checked; the split exists purely to stay under the free tier's
-// 50-subrequests-per-invocation cap.
-//
-// Growing the fleet eventually needs another entry here AND another cron in
-// wrangler.toml. The test suite asserts the shard count never exceeds this
-// list's length, so forgetting fails a test rather than silently leaving the
-// tail of the fleet un-audited.
+// A minute list gives each group its own invocation without consuming extra
+// account-level Cron Trigger slots. Keep this expression in wrangler.toml.
+export const COLLECT_CRON = "0,10,20 1 * * *";
 export const AUDIT_CRONS = ["30 1 * * *", "40 1 * * *"];
+
+const COLLECT_GROUPS: Record<number, SourceName[]> = {
+  0: ["github"],
+  10: ["posts"],
+  20: ["goatcounter", "cloudflare", "pages", "rum"]
+};
+
+export function scheduledCollection(cron: string, scheduledTime: number): { sources: SourceName[]; auditShard: number } {
+  const auditShard = AUDIT_CRONS.indexOf(cron);
+  if (auditShard >= 0) return { sources: ["audit"], auditShard };
+  if (cron === COLLECT_CRON) {
+    const sources = COLLECT_GROUPS[new Date(scheduledTime).getUTCMinutes()];
+    if (sources) return { sources: [...sources], auditShard: 0 };
+  }
+  // Never default an unrecognized schedule to an unbounded full-fleet run.
+  throw new Error(`Unknown collection schedule: ${cron} at ${scheduledTime}`);
+}

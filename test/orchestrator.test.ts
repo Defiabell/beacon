@@ -88,7 +88,7 @@ describe("runDailyCollect", () => {
 
     // github: repo_daily rows landed for every configured project on the fixture dates
     for (const project of CONFIG.projects) {
-      const series = await db.getRepoSeries(env.DB, project.repo, 30);
+      const series = await db.getRepoSeries(env.DB, project.repo, 30, "2026-08-03");
       expect(series.length).toBeGreaterThan(0);
       const today = series.find(r => r.date === "2026-08-01");
       expect(today).toBeDefined();
@@ -110,7 +110,7 @@ describe("runDailyCollect", () => {
 
     // all 7 sources recorded in source_runs
     const sourceRuns = await db.listSourceRuns(env.DB);
-    expect(sourceRuns.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum"]);
+    expect(sourceRuns.filter(r => !r.source.startsWith("github:")).map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum"]);
     const postsRun = sourceRuns.find(r => r.source === "posts")!;
     expect(postsRun.ok).toBe(false);
     expect(postsRun.error).toContain(FAILING_POST_URL);
@@ -135,13 +135,13 @@ describe("runDailyCollect", () => {
     expect(github.error).toContain(failingRepo);
 
     // the failing repo has no repo_daily row for today...
-    const failingSeries = await db.getRepoSeries(env.DB, failingRepo, 30);
+    const failingSeries = await db.getRepoSeries(env.DB, failingRepo, 30, "2026-08-03");
     expect(failingSeries.find(r => r.date === "2026-08-01")).toBeUndefined();
 
     // ...but every other configured repo still landed its row (per-repo isolation)
     for (const project of CONFIG.projects) {
       if (project.repo === failingRepo) continue;
-      const series = await db.getRepoSeries(env.DB, project.repo, 30);
+      const series = await db.getRepoSeries(env.DB, project.repo, 30, "2026-08-03");
       expect(series.find(r => r.date === "2026-08-01")).toBeDefined();
     }
 
@@ -177,6 +177,10 @@ describe("runDailyCollect", () => {
     expect(github.ok).toBe(false);
     // Reported as a traffic failure specifically, so the log says which half broke.
     expect(github.error).toContain(`${forbidden} traffic:`);
+    const health = await db.listSourceRuns(env.DB);
+    expect(health.find(row => row.source === `github:${forbidden}`)?.ok).toBe(false);
+    expect(health.filter(row => row.source.startsWith("github:") && row.ok)).toHaveLength(CONFIG.projects.length - 1);
+
 
     // The star tally landed anyway — this is the whole point.
     const stars = await db.getStarSeries(env.DB, forbidden);
@@ -184,8 +188,19 @@ describe("runDailyCollect", () => {
 
     // And no repo_daily row was invented: an absent row renders as "no data",
     // whereas a row of zeroes would claim nobody visited.
-    const series = await db.getRepoSeries(env.DB, forbidden, 30);
+    const series = await db.getRepoSeries(env.DB, forbidden, 30, "2026-08-03");
     expect(series.find(r => r.date === "2026-08-02")).toBeUndefined();
+  });
+
+  it("records a per-repo metadata failure without inventing traffic or stars", async () => {
+    const forbidden = CONFIG.projects[0].repo;
+    const failMeta: typeof fetch = async input => String(input).endsWith(`/repos/${forbidden}`)
+      ? new Response("forbidden", { status: 403 }) : stub(input);
+    await runDailyCollect(env, new Date("2026-08-02T00:00:00Z"), failMeta, ["github"]);
+    const health = await db.listSourceRuns(env.DB);
+    expect(health.find(row => row.source === `github:${forbidden}`)?.ok).toBe(false);
+    expect(await db.getStarSeries(env.DB, forbidden)).toEqual([]);
+    expect(await db.getRepoSeries(env.DB, forbidden, 30, "2026-08-03")).toEqual([]);
   });
 
   // C1: the daily cron is split across two invocations (wrangler.toml's two
@@ -204,7 +219,7 @@ describe("runDailyCollect", () => {
 
     // github never ran: no repo_daily rows landed for any configured project
     for (const project of CONFIG.projects) {
-      const series = await db.getRepoSeries(env.DB, project.repo, 30);
+      const series = await db.getRepoSeries(env.DB, project.repo, 30, "2026-08-03");
       expect(series).toEqual([]);
     }
   });
@@ -215,7 +230,7 @@ describe("runDailyCollect", () => {
     expect(reports.map(r => r.source).sort()).toEqual(["github", "posts"]);
 
     const sourceRuns = await db.listSourceRuns(env.DB);
-    expect(sourceRuns.map(r => r.source).sort()).toEqual(["github", "posts"]);
+    expect(sourceRuns.filter(r => !r.source.startsWith("github:")).map(r => r.source).sort()).toEqual(["github", "posts"]);
 
     // audit never ran: no audit_results rows landed
     const auditCount = await env.DB.prepare("select count(*) as n from audit_results").first<{ n: number }>();
