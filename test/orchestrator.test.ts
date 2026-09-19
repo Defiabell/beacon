@@ -203,8 +203,8 @@ describe("runDailyCollect", () => {
     expect(await db.getRepoSeries(env.DB, forbidden, 30, "2026-08-03")).toEqual([]);
   });
 
-  // C1: the daily cron is split across two invocations (wrangler.toml's two
-  // crons + src/index.ts's event.cron routing) to stay under the free tier's
+  // C1: the daily cron is split across five invocations (one trigger with
+  // scheduled-time routing in src/schedule.ts) to stay under the free tier's
   // 50-subrequests-per-invocation cap. This exercises the `sources` filter
   // that split relies on.
   it("with a `sources` filter, only runs and records those sources — the rest are neither invoked nor written to source_runs", async () => {

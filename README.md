@@ -86,7 +86,7 @@ curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sour
 
 Open `https://beacon.<your-subdomain>.workers.dev/` — the overview should now show stars/traffic for every project in `src/config.ts`.
 
-The configuration still uses three Cron Triggers: `0,10,20 1 * * *` selects the collection group by minute, and `30 1 * * *` / `40 1 * * *` run the audit shards. Each invocation has its own request budget. Metric windows cover the latest N complete UTC days, excluding today; Cloudflare and GoatCounter collection refreshes the last three complete days. Missing measurements return `null` and display as missing, not zero. Only confirmed empty days from successful collection become zero; partial coverage and source failures are marked explicitly.
+The configuration uses one Cron Trigger: `0,10,20,30,40 1 * * *`. Routing uses the scheduled UTC time: GitHub at 01:00, posts at 01:10, analytics at 01:20, and audit shards 0/1 at 01:30/01:40. The previous three expressions remain accepted at their original times while trigger changes propagate. Each invocation has its own request budget. Metric windows cover the latest N complete UTC days, excluding today; Cloudflare and GoatCounter collection refreshes the last three complete days. Missing measurements return `null` and display as missing, not zero. Only confirmed empty days from successful collection become zero; partial coverage and source failures are marked explicitly.
 
 ## GoatCounter (optional)
 

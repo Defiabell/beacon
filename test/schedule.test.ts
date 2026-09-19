@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { AUDIT_CRONS, COLLECT_CRON, scheduledCollection } from "../src/schedule";
+import { AUDIT_MINUTES, COLLECT_CRON, scheduledCollection } from "../src/schedule";
 import { runDailyCollect } from "../src/collect/run";
 import { CONFIG } from "../src/config";
 import { insertPost, listSourceRuns } from "../src/db";
@@ -37,11 +37,30 @@ describe("scheduled collection budgets", () => {
   it("routes every daily group and both audit shards explicitly", () => {
     expect([0, 10, 20].map(minute => scheduledCollection(COLLECT_CRON, +day + minute * 60000).sources))
       .toEqual([["github"], ["posts"], ["goatcounter", "cloudflare", "pages", "rum"]]);
-    AUDIT_CRONS.forEach((cron, auditShard) => {
-      expect(scheduledCollection(cron, +day)).toEqual({ sources: ["audit"], auditShard });
+    AUDIT_MINUTES.forEach((minute, auditShard) => {
+      expect(scheduledCollection(COLLECT_CRON, +day + minute * 60000)).toEqual({ sources: ["audit"], auditShard });
     });
+  });
+
+  it("accepts previous trigger expressions only at their original UTC times", () => {
+    for (const minute of [0, 10, 20]) {
+      expect(scheduledCollection("0,10,20 1 * * *", +day + minute * 60000))
+        .toEqual(scheduledCollection(COLLECT_CRON, +day + minute * 60000));
+    }
+    for (const minute of AUDIT_MINUTES) {
+      expect(scheduledCollection(`${minute} 1 * * *`, +day + minute * 60000))
+        .toEqual(scheduledCollection(COLLECT_CRON, +day + minute * 60000));
+    }
+    expect(() => scheduledCollection("30 1 * * *", +day + 40 * 60000)).toThrow("Unknown collection schedule");
+    expect(() => scheduledCollection("40 1 * * *", +day + 30 * 60000)).toThrow("Unknown collection schedule");
+    expect(() => scheduledCollection("0,10,20 1 * * *", +day + 30 * 60000)).toThrow("Unknown collection schedule");
+  });
+
+  it("rejects unknown expressions, slots and invalid timestamps without a full-fleet fallback", () => {
     expect(() => scheduledCollection("0 1 * * *", +day)).toThrow("Unknown collection schedule");
-    expect(() => scheduledCollection(COLLECT_CRON, +day + 60000)).toThrow("Unknown collection schedule");
+    for (const timestamp of [NaN, Infinity, 1e20, +day + 1, +day + 1000, +day + 60000, +day + 3600000]) {
+      expect(() => scheduledCollection(COLLECT_CRON, timestamp)).toThrow("Unknown collection schedule");
+    }
   });
 
   it("collects the current fleet and 12 posts without starving analytics", async () => {

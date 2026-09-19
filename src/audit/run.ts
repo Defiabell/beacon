@@ -3,7 +3,7 @@ import type { ProjectConfig } from "../config";
 import type { FetchFn } from "../collect/github";
 import { ghHeaders } from "../collect/github";
 import { CONFIG } from "../config";
-import { AUDIT_CRONS } from "../schedule";
+import { AUDIT_MINUTES } from "../schedule";
 import { upsertAuditResults, insertTodoIfNew, reopenTodoByTitle, closeTodoByTitle } from "../db";
 import type { RepoAuditInput } from "./checks";
 import { runRepoChecks, todoTitle } from "./checks";
@@ -20,7 +20,7 @@ const HEAD_UNSUPPORTED_STATUSES = new Set([403, 404, 405, 410]);
 // CONFIG.projects fleet stays under the cap, so growing the fleet fails a test
 // locally instead of silently blowing the audit's subrequest budget in
 // production. See wrangler.toml / src/collect/run.ts for how the daily cron is
-// split across two invocations so this budget doesn't also have to share
+// split into separate invocation slots so each audit shard does not share
 // headroom with github/posts/goatcounter in the same invocation.
 const MAX_LINKS_CHECKED = 3;
 
@@ -54,8 +54,8 @@ export function projectAuditCost(p: ProjectConfig): number {
 }
 
 // Splits the fleet into contiguous groups, each of which fits inside one
-// invocation's subrequest budget. Every shard runs every day (one cron each,
-// minutes apart), so sharding costs nothing in freshness — a project is still
+// invocation's subrequest budget. Every shard runs daily at its own minute
+// slot, so sharding costs nothing in freshness — a project is still
 // re-checked daily. What it buys is that adding the 7th project stops meaning
 // "the audit silently starts failing in production".
 //
@@ -343,17 +343,17 @@ export async function runAudit(
   shardIndex = 0
 ): Promise<void> {
   const shards = auditShards(CONFIG.projects);
-  // More shards than crons to run them means the tail of the fleet is never
-  // audited — and stale "pass" rows would keep the dashboard looking healthy
+  // More shards than scheduled minutes means the tail is never audited —
+  // and stale "pass" rows would keep the dashboard looking healthy
   // while nothing was actually checked. Fail the source instead, loudly.
-  if (shards.length > AUDIT_CRONS.length) {
+  if (shards.length > AUDIT_MINUTES.length) {
     throw new Error(
-      `audit needs ${shards.length} shards but only ${AUDIT_CRONS.length} cron(s) are configured; ` +
+      `audit needs ${shards.length} shards but only ${AUDIT_MINUTES.length} audit minute slot(s) are configured; ` +
         `add one to src/schedule.ts AND wrangler.toml`
     );
   }
   // A shard index past the end is not an error: it happens whenever the fleet
-  // shrinks enough to need fewer shards than there are crons. Nothing to do.
+  // shrinks enough to need fewer shards than there are scheduled minutes. Nothing to do.
   const projects = shards[shardIndex] ?? [];
   const checkedAt = new Date().toISOString();
   const failures: string[] = [];
