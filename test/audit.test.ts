@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
 import { runRepoChecks, todoTitle, type RepoAuditInput } from "../src/audit/checks";
-import { AUDIT_CRONS } from "../src/schedule";
+import { AUDIT_MINUTES } from "../src/schedule";
 import { collectAuditInput, runAudit, auditWorstCaseSubrequests, SUBREQUEST_CAP, auditShards} from "../src/audit/run";
 import * as db from "../src/db";
 import { CONFIG } from "../src/config";
@@ -644,7 +644,7 @@ describe("audit subrequest budget", () => {
   // instead of there.
   // The whole fleet no longer has to fit one invocation — that is what sharding
   // bought. What must still hold is that every individual shard fits, and that
-  // there is a cron to run each one.
+  // there is a scheduled minute to run each one.
   it("every audit shard fits inside one invocation's subrequest budget", () => {
     const shards = auditShards(CONFIG.projects);
     shards.forEach((shard, i) => {
@@ -656,13 +656,13 @@ describe("audit subrequest budget", () => {
     });
   });
 
-  it("has a cron configured for every shard, so no project goes un-audited", () => {
+  it("has a scheduled minute configured for every shard, so no project goes un-audited", () => {
     const shards = auditShards(CONFIG.projects);
     expect(
       shards.length,
-      `the fleet needs ${shards.length} audit shards but src/schedule.ts lists ${AUDIT_CRONS.length} cron(s). ` +
+      `the fleet needs ${shards.length} audit shards but src/schedule.ts lists ${AUDIT_MINUTES.length} audit minute slot(s). ` +
         `Add one to BOTH src/schedule.ts and wrangler.toml, or the tail of the fleet is never checked.`
-    ).toBeLessThanOrEqual(AUDIT_CRONS.length);
+    ).toBeLessThanOrEqual(AUDIT_MINUTES.length);
   });
 
   it("shards partition the fleet: every project appears exactly once", () => {
