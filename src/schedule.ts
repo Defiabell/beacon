@@ -13,10 +13,12 @@ const COLLECT_GROUPS: Record<number, SourceName[]> = {
 };
 
 export function scheduledCollection(cron: string, scheduledTime: number): { sources: SourceName[]; auditShard: number } {
-  const scheduled = new Date(scheduledTime);
+  // Cloudflare delivers scheduledTime with a few seconds of jitter past the
+  // minute (observed hh:mm:04 in production), so route on the containing
+  // minute rather than demanding an exact :00.000 timestamp.
+  const scheduled = new Date(Number.isFinite(scheduledTime) ? Math.floor(scheduledTime / 60000) * 60000 : NaN);
   const minute = scheduled.getUTCMinutes();
-  const validTime = Number.isFinite(scheduledTime) && scheduled.getUTCHours() === 1 &&
-    scheduled.getUTCSeconds() === 0 && scheduled.getUTCMilliseconds() === 0;
+  const validTime = Number.isFinite(scheduledTime) && scheduledTime >= 0 && scheduled.getUTCHours() === 1;
   if (validTime) {
     // Accept the previous expressions during Cron Trigger propagation, but
     // only at their original UTC slots. Never route using actual start time.

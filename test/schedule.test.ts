@@ -58,8 +58,19 @@ describe("scheduled collection budgets", () => {
 
   it("rejects unknown expressions, slots and invalid timestamps without a full-fleet fallback", () => {
     expect(() => scheduledCollection("0 1 * * *", +day)).toThrow("Unknown collection schedule");
-    for (const timestamp of [NaN, Infinity, 1e20, +day + 1, +day + 1000, +day + 60000, +day + 3600000]) {
+    for (const timestamp of [NaN, Infinity, 1e20, +day + 60000, +day + 3600000, +day - 1]) {
       expect(() => scheduledCollection(COLLECT_CRON, timestamp)).toThrow("Unknown collection schedule");
+    }
+  });
+
+  it("tolerates the few seconds of jitter Cloudflare puts on scheduledTime", () => {
+    // Production regression 2026-09-20..22: every trigger arrived as hh:mm:04
+    // (e.g. 1790041204000 = 01:40:04Z) and the whole day was thrown away.
+    for (const jitter of [1, 1000, 4117, 59999]) {
+      expect(scheduledCollection(COLLECT_CRON, +day + jitter).sources).toEqual(["github"]);
+      AUDIT_MINUTES.forEach((minute, auditShard) => {
+        expect(scheduledCollection(COLLECT_CRON, +day + minute * 60000 + jitter)).toEqual({ sources: ["audit"], auditShard });
+      });
     }
   });
 
