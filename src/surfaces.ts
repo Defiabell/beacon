@@ -97,7 +97,7 @@ export const SURFACES: Surface[] = [
     id: "own",
     name: "自有站点",
     note: "自己的页面之间互相跳转，包括这个面板本身。不算外部曝光，单列出来是为了不让它混进其他格子。",
-    hosts: ["defiabell.github.io", "defiabell.pages.dev", "shiling.pages.dev", "workers.dev"]
+    hosts: ["defiabell.com", "defiabell.github.io", "defiabell.pages.dev", "shiling.pages.dev", "workers.dev"]
   }
 ];
 
