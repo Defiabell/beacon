@@ -39,7 +39,7 @@ export const CONFIG: BeaconConfig = {
     // bilingual but the UI is Chinese, and the tag drives channel suggestions,
     // so claiming en here would keep proposing Show HN / Console.dev.
     { name: "reading-room", repo: "Defiabell/reading-room", tags: ["macos", "tool", "zh"] },
-    { name: "beacon", repo: "Defiabell/beacon", tags: ["tool", "web", "selfhosted", "en"], homepage: "https://beacon.defiabell.workers.dev" }
+    { name: "beacon", repo: "Defiabell/beacon", tags: ["tool", "web", "selfhosted", "en"], homepage: "https://beacon.defiabell.com" }
   ],
   // siteTag (not site_token) — the internal id RUM's GraphQL filters on.
   sites: [
