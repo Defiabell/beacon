@@ -1,7 +1,7 @@
 import { metricCoverage, type MetricCoverage } from "../metrics";
 import type { Env, RepoDaily, ReferrerRow, Post, PostMetrics, Todo, CheckResult, SourceRun } from "../types";
 import type { ProjectConfig } from "../config";
-import { CONFIG } from "../config";
+import { CONFIG, siteFor, siteHosts } from "../config";
 import {
   CHANNELS,
   suggestPairs,
@@ -464,11 +464,11 @@ export async function buildOverview(env: Env): Promise<Overview> {
   const workers = workerRows.map(w => ({ ...w, coverage: metricCoverage(WORKER_WINDOW_DAYS, w.days, w.lastDate, today,
     sources.find(s => s.source === (w.script.endsWith('.pages.dev') || w.script.startsWith('pages-worker--') ? 'pages' : 'cloudflare'))) }));
   const siteRows = await getSiteTotals(db, SITE_PV_WINDOW_DAYS, today);
-  for (const site of CONFIG.sites) {
-    if (!siteRows.some(s => s.site === site.host)) siteRows.push({ site: site.host, pageviews: null, visitors: null, days: 0, lastDate: null });
+  for (const host of CONFIG.sites.flatMap(siteHosts)) {
+    if (!siteRows.some(s => s.site === host)) siteRows.push({ site: host, pageviews: null, visitors: null, days: 0, lastDate: null });
   }
   const sites = siteRows.map(s => ({ ...s, coverage: metricCoverage(SITE_PV_WINDOW_DAYS, s.days, s.lastDate, today,
-    sources.find(r => r.source === (CONFIG.sites.some(c => c.host === s.site) ? 'rum' : 'goatcounter'))) }));
+    sources.find(r => r.source === (siteFor(CONFIG.sites, s.site) ? 'rum' : 'goatcounter'))) }));
   const sitePv7d = sites.length > 0 && sites.every(s => s.coverage.status === 'complete')
     ? sites.reduce((total, s) => total + (s.pageviews ?? 0), 0) : null;
   return {

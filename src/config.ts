@@ -13,7 +13,35 @@ export interface ProjectConfig {
 // A site tracked by Cloudflare Web Analytics. One entry == one hostname, which
 // is how Web Analytics scopes a "site": defiabell.github.io therefore covers
 // both the blog and the nightide game living at /nightide/ under it.
-export interface SiteConfig { name: string; host: string; siteTag: string; }
+//
+// The exception is a zone-level site (Cloudflare's automatic injection for a
+// whole zone): one siteTag then covers the apex and every subdomain. Such an
+// entry declares `hosts` — the hostnames expected under it — and the collector
+// splits its rows by requestHost so each subdomain is stored as its own site.
+// A hostname that shows up but isn't listed is still stored; `hosts` only
+// drives zero-filling for quiet days and the name lookup, it is not a filter.
+export interface SiteConfig { name: string; host: string; siteTag: string; hosts?: string[]; }
+
+export function isZoneSite(site: SiteConfig): boolean {
+  return Array.isArray(site.hosts);
+}
+
+// Every hostname a config entry is expected to produce rows for.
+export function siteHosts(site: SiteConfig): string[] {
+  return site.hosts ?? [site.host];
+}
+
+// The config entry a stored site_daily hostname belongs to. A zone-level entry
+// claims its apex and any subdomain of it, listed or not, because that is what
+// the zone-level injection actually covers.
+export function siteFor(sites: SiteConfig[], host: string): SiteConfig | undefined {
+  const h = host.toLowerCase();
+  return sites.find(s => {
+    if (!isZoneSite(s)) return s.host.toLowerCase() === h;
+    const apex = s.host.toLowerCase();
+    return h === apex || h.endsWith("." + apex) || s.hosts!.some(x => x.toLowerCase() === h);
+  });
+}
 export interface BeaconConfig {
   githubUser: string;
   projects: ProjectConfig[];
@@ -46,6 +74,20 @@ export const CONFIG: BeaconConfig = {
     { name: "听风闲语 + 夜潮", host: "defiabell.github.io", siteTag: "679daf9b94fa433aa14020d7a40caf1b" },
     { name: "英文站", host: "defiabell.pages.dev", siteTag: "642a79a267904b0dbc59a7d712a0d32e" },
     { name: "mythmesh", host: "mythmesh.pages.dev", siteTag: "79f96ab6a4fb4226affa009174c939ff" },
-    { name: "食灵", host: "shiling.pages.dev", siteTag: "53be0dd64f2a46faa726fac13eb404a6" }
+    { name: "食灵", host: "shiling.pages.dev", siteTag: "53be0dd64f2a46faa726fac13eb404a6" },
+    // Zone-level site created 2026-10-20 with the defiabell.com domain: one tag,
+    // auto-injected on every *.defiabell.com host. The old pages.dev /
+    // workers.dev addresses above keep their own manual tags, so the two sets
+    // never overlap. `hosts` is the current subdomain map (reference:
+    // agent-workspace memory reference_defiabell_domain); www is left out on
+    // purpose — it 301s to the apex and only produces a stray row now and then.
+    {
+      name: "defiabell.com（全域）", host: "defiabell.com", siteTag: "2f684bb019964ffda60ebf040fcb010a",
+      hosts: [
+        "defiabell.com", "island.defiabell.com", "yilian.defiabell.com", "yixi.defiabell.com",
+        "mythmesh.defiabell.com", "geshuo.defiabell.com", "shiling.defiabell.com", "gulliver.defiabell.com",
+        "shotsync-demo.defiabell.com", "beacon.defiabell.com", "screen-coach.defiabell.com", "comments.defiabell.com"
+      ]
+    }
   ]
 };

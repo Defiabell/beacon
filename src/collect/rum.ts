@@ -1,6 +1,6 @@
 import type { SiteDaily } from "../types";
 import type { FetchFn } from "./github";
-import type { SiteConfig } from "../config";
+import { isZoneSite, type SiteConfig } from "../config";
 
 // Daily pageviews per site from Cloudflare Web Analytics (RUM).
 //
@@ -20,6 +20,11 @@ import type { SiteConfig } from "../config";
 // dimension, which this collector deliberately does not store (a per-path table
 // would be a different feature, and the daily roll-up is what the dashboard
 // shows).
+//
+// A zone-level site (SiteConfig.hosts) is the one case where a tag spans many
+// hostnames. Its alias adds the requestHost dimension and each row is stored
+// under that hostname, so the dashboard sees gulliver.defiabell.com and
+// mythmesh.defiabell.com as separate sites even though one tag reports both.
 
 const ENDPOINT = "https://api.cloudflare.com/client/v4/graphql";
 
@@ -32,10 +37,14 @@ const SITE_TAG = /^[0-9a-f]{32}$/;
 export function buildQuery(sites: SiteConfig[]): string {
   const parts = sites.map((s, i) => {
     if (!SITE_TAG.test(s.siteTag)) throw new Error(`invalid siteTag for ${s.host}: ${s.siteTag}`);
+    // A zone-level alias returns hosts × days rows instead of days, so it gets
+    // the host dimension and a limit sized for a dozen hosts over the re-fetch
+    // window rather than for one hostname.
+    const zone = isZoneSite(s);
     return (
-      `s${i}: rumPageloadEventsAdaptiveGroups(limit:200, ` +
+      `s${i}: rumPageloadEventsAdaptiveGroups(limit:${zone ? 1000 : 200}, ` +
       `filter:{siteTag:"${s.siteTag}", date_geq:$start, date_leq:$end}, orderBy:[date_ASC])` +
-      `{ count sum{visits} dimensions{date} }`
+      `{ count sum{visits} dimensions{date${zone ? " requestHost" : ""}} }`
     );
   });
   return `query($acc:String!,$start:Date!,$end:Date!){viewer{accounts(filter:{accountTag:$acc}){${parts.join(" ")}}}}`;
@@ -44,7 +53,7 @@ export function buildQuery(sites: SiteConfig[]): string {
 interface RumRow {
   count?: unknown;
   sum?: { visits?: unknown };
-  dimensions?: { date?: unknown };
+  dimensions?: { date?: unknown; requestHost?: unknown };
 }
 
 function num(v: unknown): number {
@@ -69,8 +78,17 @@ export function normalizeRum(payload: unknown, sites: SiteConfig[]): SiteDaily[]
       // date is half the primary key; a row without it cannot be stored under
       // any honest key, so it is dropped rather than bucketed somewhere.
       if (typeof date !== "string") continue;
+      // For a zone-level site the hostname is the other half of the key. RUM
+      // reports the odd pageload with an empty requestHost; folding those into
+      // the apex would inflate it, so they are dropped the same way.
+      let host = site.host;
+      if (isZoneSite(site)) {
+        const rh = raw?.dimensions?.requestHost;
+        if (typeof rh !== "string" || rh === "") continue;
+        host = rh.toLowerCase();
+      }
       out.push({
-        site: site.host,
+        site: host,
         date,
         pageviews: num(raw?.count),
         visitors: num(raw?.sum?.visits)
@@ -118,7 +136,8 @@ export async function fetchRumDaily(
       if (typeof raw?.dimensions?.date !== "string" ||
           !/^\d{4}-\d{2}-\d{2}$/.test(raw.dimensions.date) ||
           typeof raw.count !== "number" || !Number.isFinite(raw.count) ||
-          typeof raw.sum?.visits !== "number" || !Number.isFinite(raw.sum.visits)) {
+          typeof raw.sum?.visits !== "number" || !Number.isFinite(raw.sum.visits) ||
+          (isZoneSite(sites[i]) && typeof raw.dimensions.requestHost !== "string")) {
         throw new Error("cloudflare rum response contains invalid daily data");
       }
     }

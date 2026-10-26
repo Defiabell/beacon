@@ -13,7 +13,7 @@ import type { SiteTotal } from "../db";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, EventAttribution, ImpactWindow } from "../impact/attribute";
-import { CONFIG } from "../config";
+import { CONFIG, isZoneSite, siteFor } from "../config";
 import { page, svgSparkline, esc, type SparkMarker } from "./layout";
 
 type NavKey = "overview" | "matrix" | "todos" | "posts" | "impact" | null;
@@ -247,10 +247,12 @@ function sitesSection(sites: (SiteTotal & { coverage?: MetricCoverage })[]): str
   }
   const rows = sites
     .map(s => {
-      const cfg = CONFIG.sites.find(c => c.host === s.site);
-      const label = cfg ? `${cfg.name}` : s.site;
+      const cfg = siteFor(CONFIG.sites, s.site);
+      // A zone-level entry names the zone, not the host under it; the host is
+      // the more useful label there, and the zone name goes in the tooltip.
+      const label = !cfg || isZoneSite(cfg) ? s.site : cfg.name;
       return (
-        `<li><span class="proj" title="${esc(s.site)}">${esc(label)}</span>` +
+        `<li><span class="proj" title="${esc(cfg && isZoneSite(cfg) ? cfg.name : s.site)}">${esc(label)}</span>` +
         `<span class="src">${esc(s.site)}</span>` +
         `<span class="effect">${fmtNum(s.pageviews)} 次浏览 / ${fmtNum(s.visitors)} 次访问</span>${coverageNote(s.coverage)}</li>`
       );

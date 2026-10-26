@@ -7,7 +7,7 @@ import { fetchWorkerDaily } from "./cloudflare";
 import { fetchRumDaily } from "./rum";
 import { fetchPagesFunctionsDaily, fetchPagesProjects, resolvePagesFunctionsToWorkerDaily } from "./pages";
 import { runAudit } from "../audit/run";
-import { CONFIG } from "../config";
+import { CONFIG, siteHosts } from "../config";
 import {
   upsertRepoDaily,
   replaceReferrerSnapshot,
@@ -196,9 +196,11 @@ async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<Sou
   );
   const byKey = new Map(rows.map(row => [`${row.site}:${row.date}`, row]));
   for (const site of CONFIG.sites) {
-    for (const day of dates) {
-      const key = `${site.host}:${day}`;
-      if (!byKey.has(key)) byKey.set(key, { site: site.host, date: day, pageviews: 0, visitors: 0 });
+    for (const host of siteHosts(site)) {
+      for (const day of dates) {
+        const key = `${host}:${day}`;
+        if (!byKey.has(key)) byKey.set(key, { site: host, date: day, pageviews: 0, visitors: 0 });
+      }
     }
   }
   await upsertSiteDaily(env.DB, [...byKey.values()]);
