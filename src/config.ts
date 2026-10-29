@@ -67,7 +67,10 @@ export const CONFIG: BeaconConfig = {
     // bilingual but the UI is Chinese, and the tag drives channel suggestions,
     // so claiming en here would keep proposing Show HN / Console.dev.
     { name: "reading-room", repo: "Defiabell/reading-room", tags: ["macos", "tool", "zh"] },
-    { name: "beacon", repo: "Defiabell/beacon", tags: ["tool", "web", "selfhosted", "en"], homepage: "https://beacon.defiabell.com" }
+    { name: "beacon", repo: "Defiabell/beacon", tags: ["tool", "web", "selfhosted", "en"], homepage: "https://beacon.defiabell.com" },
+    // Public since 2026-10-19; the other autumn sites (randeng, kaogu, lost,
+    // fanyi, shouye) live in private repos, so they only appear as hosts below.
+    { name: "yilian", repo: "Defiabell/yilian", tags: ["web", "zh", "tool"], homepage: "https://yilian.defiabell.com" }
   ],
   // siteTag (not site_token) — the internal id RUM's GraphQL filters on.
   sites: [
@@ -86,7 +89,9 @@ export const CONFIG: BeaconConfig = {
       hosts: [
         "defiabell.com", "island.defiabell.com", "yilian.defiabell.com", "yixi.defiabell.com",
         "mythmesh.defiabell.com", "geshuo.defiabell.com", "shiling.defiabell.com", "gulliver.defiabell.com",
-        "shotsync-demo.defiabell.com", "beacon.defiabell.com", "screen-coach.defiabell.com", "comments.defiabell.com"
+        "shotsync-demo.defiabell.com", "beacon.defiabell.com", "screen-coach.defiabell.com", "comments.defiabell.com",
+        // Added 2026-10-29: the late-October launches (private repos, sites only).
+        "randeng.defiabell.com", "kaogu.defiabell.com", "lost.defiabell.com", "fanyi.defiabell.com", "shouye.defiabell.com"
       ]
     }
   ]
