@@ -90,6 +90,17 @@ describe("runRepoChecks", () => {
     expect(result.detail).toContain("Too many redirects");
   });
 
+  it("well-known: a 5xx is unverifiable, not a failing file", () => {
+    // Live 2026-11-01: beacon probing its own host got 522 on every file (a
+    // Worker cannot fetch a route it serves itself) and minted a todo for a
+    // site whose robots.txt answers 200 text/plain to everyone else.
+    const input = golden();
+    for (const f of [input.wellKnown!.robots, input.wellKnown!.sitemap, input.wellKnown!.llms]) f.status = 522;
+    const result = byId(runRepoChecks(input))["well-known"];
+    expect(result.status).toBe("na");
+    expect(result.detail).toContain("robots.txt (HTTP 522)");
+  });
+
   it("well-known: n/a when the project has no checkable homepage", () => {
     const input = golden();
     input.wellKnown = null;

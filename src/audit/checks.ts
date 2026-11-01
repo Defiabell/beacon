@@ -189,9 +189,18 @@ function isHtml(contentType: string | null): boolean {
   return (contentType ?? "").toLowerCase().includes("text/html");
 }
 
+// A 5xx is the far end (or the path to it) having a bad day, not a statement
+// about the file — the same stance the README link check takes. It is also
+// what a Worker gets when it fetches a route served by itself: beacon probing
+// beacon.defiabell.com answered 522 on all three files (2026-11-01) while an
+// ordinary client got 200 text/plain for robots.txt.
+function isUnverifiable(f: WellKnownFile): boolean {
+  return f.status === null || f.status >= 500;
+}
+
 function wellKnownFileProblem(name: string, f: WellKnownFile): string | null {
-  if (f.status === null) return null; // unverifiable — handled by the caller
-  if (f.status < 200 || f.status >= 300) return `${name} -> ${f.status}`;
+  if (isUnverifiable(f)) return null; // handled by the caller
+  if (f.status! < 200 || f.status! >= 300) return `${name} -> ${f.status}`;
   if (isHtml(f.contentType)) return `${name} is text/html (SPA fallback, a fake 200)`;
   return null;
 }
@@ -202,16 +211,16 @@ function checkWellKnown(input: RepoAuditInput): CheckResult {
     return { checkId: "well-known", status: "na", priority: 2, detail: "no checkable homepage for this project" };
   }
   const files: [string, WellKnownFile][] = [["robots.txt", probe.robots], ["sitemap", probe.sitemap], ["llms.txt", probe.llms]];
-  // A transport failure on any file is not a verdict on the site. Failing
-  // here would mint a todo for a site that is fine, which this audit has done
-  // enough times already (see ./run.ts's link-check history).
-  const unreachable = files.filter(([, f]) => f.status === null);
+  // A transport failure or a 5xx on any file is not a verdict on the site.
+  // Failing here would mint a todo for a site that is fine, which this audit
+  // has done enough times already (see ./run.ts's link-check history).
+  const unreachable = files.filter(([, f]) => isUnverifiable(f));
   if (unreachable.length > 0) {
     return {
       checkId: "well-known",
       status: "na",
       priority: 2,
-      detail: `unverifiable from a Worker: ${unreachable.map(([n, f]) => `${n} (${f.error ?? "fetch failed"})`).join(", ")}`
+      detail: `unverifiable from a Worker: ${unreachable.map(([n, f]) => `${n} (${f.error ?? `HTTP ${f.status}`})`).join(", ")}`
     };
   }
   const problems = files.map(([n, f]) => wellKnownFileProblem(n, f)).filter((p): p is string => p !== null);
