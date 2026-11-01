@@ -28,6 +28,7 @@ function golden(): RepoAuditInput {
     ogImageUrl: "https://shotsync.example.com/social-card.png",
     brokenLinks: [],
     wellKnown: {
+      root: { url: "https://shotsync.example.com/", status: 200, contentType: "text/html; charset=utf-8" },
       robots: { url: "https://shotsync.example.com/robots.txt", status: 200, contentType: "text/plain; charset=utf-8", hasSitemapLine: true, sitemapUrl: "https://shotsync.example.com/sitemap.xml" },
       sitemap: { url: "https://shotsync.example.com/sitemap.xml", status: 200, contentType: "application/xml" },
       llms: { url: "https://shotsync.example.com/llms.txt", status: 200, contentType: "text/plain" }
@@ -95,10 +96,25 @@ describe("runRepoChecks", () => {
     // Worker cannot fetch a route it serves itself) and minted a todo for a
     // site whose robots.txt answers 200 text/plain to everyone else.
     const input = golden();
-    for (const f of [input.wellKnown!.robots, input.wellKnown!.sitemap, input.wellKnown!.llms]) f.status = 522;
+    for (const f of [input.wellKnown!.root, input.wellKnown!.robots, input.wellKnown!.sitemap, input.wellKnown!.llms]) f.status = 522;
     const result = byId(runRepoChecks(input))["well-known"];
     expect(result.status).toBe("na");
-    expect(result.detail).toContain("robots.txt (HTTP 522)");
+    expect(result.detail).toContain("site root (HTTP 522)");
+  });
+
+  it("well-known: n/a when the site root is not an HTML page", () => {
+    // screen-coach.defiabell.com is the Mac app's trial-licence API Worker:
+    // `/` answers 404 application/json. Not a website, so nothing is expected
+    // of it — a fail here was a todo nobody could act on.
+    const input = golden();
+    input.wellKnown!.root = { url: "https://shotsync.example.com/", status: 404, contentType: "application/json" };
+    input.wellKnown!.robots = { ...input.wellKnown!.robots, status: 404, contentType: "application/json" };
+    const result = byId(runRepoChecks(input))["well-known"];
+    expect(result.status).toBe("na");
+    expect(result.detail).toContain("site root is not an HTML page");
+    // A 200 that is not HTML (a JSON API root) is equally not a website.
+    input.wellKnown!.root = { url: "https://shotsync.example.com/", status: 200, contentType: "application/json" };
+    expect(byId(runRepoChecks(input))["well-known"].status).toBe("na");
   });
 
   it("well-known: n/a when the project has no checkable homepage", () => {
@@ -400,7 +416,7 @@ describe("collectAuditInput", () => {
       if (/releases\?per_page=10$/.test(url)) return Response.json([]);
       if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
       if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
-      if (/\/(robots\.txt|sitemap[^/]*|llms\.txt)$/.test(url)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
+      if (/^https?:\/\/[^/]+\/$/.test(url) || /\/(robots\.txt|sitemap[^/]*|llms\.txt)$/.test(url)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
       probed.push(url);
       return new Response("", { status: 404 });
     };
@@ -830,7 +846,7 @@ describe("link checking: two more false-positive classes", () => {
       if (/releases\?per_page=10$/.test(url)) return Response.json([]);
       if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
       if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
-      if (/\/(robots\.txt|sitemap[^/]*|llms\.txt)$/.test(url)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
+      if (/^https?:\/\/[^/]+\/$/.test(url) || /\/(robots\.txt|sitemap[^/]*|llms\.txt)$/.test(url)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
       probed.push(url);
       return new Response("ok", { status: 200 });
     };
@@ -905,7 +921,7 @@ describe("well-known files probe", () => {
     };
   }
 
-  it("makes exactly three GETs: robots.txt, then the sitemap robots declares, and llms.txt", async () => {
+  it("makes exactly four GETs: the root and robots.txt, then the sitemap robots declares and llms.txt", async () => {
     const seen: string[] = [];
     const probe = await collectWellKnown(ORIGIN, siteStub({
       "/robots.txt": { status: 200, type: "text/plain", body: "User-agent: *\nAllow: /\n\nSitemap: https://site.example.com/sitemap-index.xml\n" },
@@ -913,6 +929,7 @@ describe("well-known files probe", () => {
       "/llms.txt": { status: 200, type: "text/plain; charset=utf-8" }
     }, seen));
     expect(seen).toEqual([
+      `GET ${ORIGIN}/`,
       `GET ${ORIGIN}/robots.txt`,
       `GET ${ORIGIN}/sitemap-index.xml`,
       `GET ${ORIGIN}/llms.txt`
@@ -928,6 +945,7 @@ describe("well-known files probe", () => {
     const probe = await collectWellKnown(ORIGIN, siteStub({
       "/robots.txt": { status: 200, type: "text/plain", body: "User-agent: *\nSitemap: /sitemap.xml\n" }
     }));
+    // siteStub's catch-all answers `/` with 200 text/html, so this IS a site.
     const result = byId(runRepoChecks({ ...golden(), wellKnown: probe }))["well-known"];
     expect(result.status).toBe("fail");
     expect(result.detail).toContain("sitemap is text/html");
@@ -936,7 +954,9 @@ describe("well-known files probe", () => {
 
   it("turns a thrown fetch into status null instead of propagating or failing the check", async () => {
     const stub: typeof fetch = async input => {
-      if (String(input).endsWith("/llms.txt")) throw new TypeError("fetch failed");
+      const url = String(input);
+      if (url.endsWith("/llms.txt")) throw new TypeError("fetch failed");
+      if (url === `${ORIGIN}/`) return new Response("<html>", { status: 200, headers: { "content-type": "text/html" } });
       return new Response("Sitemap: /s.xml", { status: 200, headers: { "content-type": "text/plain" } });
     };
     const probe = await collectWellKnown(ORIGIN, stub);

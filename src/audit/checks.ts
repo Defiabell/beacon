@@ -40,6 +40,10 @@ export interface WellKnownFile {
 }
 
 export interface WellKnownProbe {
+  // The site root. A homepage that is not an HTML page (an API Worker such as
+  // screen-coach's trial-licence endpoint answers 404 application/json) is
+  // not a website, and robots/sitemap/llms.txt are not expected of it.
+  root: WellKnownFile;
   robots: WellKnownFile;
   sitemap: WellKnownFile;
   llms: WellKnownFile;
@@ -209,6 +213,22 @@ function checkWellKnown(input: RepoAuditInput): CheckResult {
   const probe = input.wellKnown;
   if (!probe) {
     return { checkId: "well-known", status: "na", priority: 2, detail: "no checkable homepage for this project" };
+  }
+  if (isUnverifiable(probe.root)) {
+    return {
+      checkId: "well-known",
+      status: "na",
+      priority: 2,
+      detail: `unverifiable from a Worker: site root (${probe.root.error ?? `HTTP ${probe.root.status}`})`
+    };
+  }
+  if (probe.root.status! < 200 || probe.root.status! >= 300 || !isHtml(probe.root.contentType)) {
+    return {
+      checkId: "well-known",
+      status: "na",
+      priority: 2,
+      detail: `site root is not an HTML page (HTTP ${probe.root.status}, ${probe.root.contentType ?? "no content-type"}) — an API endpoint, not a website`
+    };
   }
   const files: [string, WellKnownFile][] = [["robots.txt", probe.robots], ["sitemap", probe.sitemap], ["llms.txt", probe.llms]];
   // A transport failure or a 5xx on any file is not a verdict on the site.

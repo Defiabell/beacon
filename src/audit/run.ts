@@ -30,11 +30,13 @@ const MAX_LINKS_CHECKED = 3;
 // reading releaseAssetCount there, so fetching it was pure waste).
 const AUDIT_BASE_FETCHES = 3;
 
-// Well-known files probed on the project's homepage origin: robots.txt, the
-// sitemap robots.txt declares (else /sitemap.xml), and llms.txt. Exactly one
-// GET each, no HEAD — a HEAD that 404s would need the same GET fallback the
-// link check has, doubling the worst case for no information gain.
-const WELL_KNOWN_FETCHES = 3;
+// Well-known files probed on the project's homepage origin: the root itself
+// (is this even an HTML site?), robots.txt, the sitemap robots.txt declares
+// (else /sitemap.xml), and llms.txt. Exactly one GET each, no HEAD — a HEAD
+// that 404s would need the same GET fallback the link check has, doubling the
+// worst case for no information gain. All four are always fetched, so the cost
+// is a constant the shard formula can rely on rather than a data-dependent one.
+const WELL_KNOWN_FETCHES = 4;
 
 // The Workers free tier caps an invocation at 50 subrequests (Cloudflare's
 // documented limit). Overrunning it fails the offending fetch rather than
@@ -363,15 +365,18 @@ export function sitemapUrlFor(origin: string, declared: string | null | undefine
   return `${origin}/sitemap.xml`;
 }
 
-// Exactly WELL_KNOWN_FETCHES subrequests: robots.txt first (its Sitemap: line
-// decides the second URL), then the sitemap and llms.txt in parallel.
+// Exactly WELL_KNOWN_FETCHES subrequests: the root and robots.txt first (the
+// robots Sitemap: line decides the sitemap URL), then sitemap and llms.txt.
 export async function collectWellKnown(origin: string, fetchFn: FetchFn): Promise<WellKnownProbe> {
-  const robots = await probeWellKnownFile(`${origin}/robots.txt`, fetchFn, true);
+  const [root, robots] = await Promise.all([
+    probeWellKnownFile(`${origin}/`, fetchFn, false),
+    probeWellKnownFile(`${origin}/robots.txt`, fetchFn, true)
+  ]);
   const [sitemap, llms] = await Promise.all([
     probeWellKnownFile(sitemapUrlFor(origin, robots.sitemapUrl), fetchFn, false),
     probeWellKnownFile(`${origin}/llms.txt`, fetchFn, false)
   ]);
-  return { robots, sitemap, llms };
+  return { root, robots, sitemap, llms };
 }
 
 export async function collectAuditInput(
