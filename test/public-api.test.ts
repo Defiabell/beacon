@@ -607,3 +607,51 @@ describe("metricsAreStale", () => {
 });
 
 afterAll(() => vi.useRealTimers());
+
+// Site-side referrers (Cloudflare RUM refererHost, src/collect/rum.ts) on the
+// overview and the project page. Seeded last so every earlier assertion in
+// this file saw site_referrer_daily empty — that is also the branch the first
+// test below pins: before the collector has ever run, the per-site AI count
+// is null, not a zero nobody measured.
+describe("site referrals (AI answer engines)", () => {
+  const SHILING_HOST = "shiling.defiabell.com"; // shiling's homepage, under the zone-level site
+
+  it("reports null AI referrals and an empty site-surface breakdown before any referrer row exists", async () => {
+    const res = await call("GET", "/api/overview");
+    const body = await res!.json<Overview>();
+    expect(body.sites.find(s => s.site === SHILING_HOST)!.aiPageviews7d).toBeNull();
+    expect(body.siteSurfaces!.since).toBeNull();
+    expect(body.siteSurfaces!.surfaces.find(s => s.id === "ai")).toMatchObject({ views: 0, hosts: [] });
+  });
+
+  it("counts AI-engine pageloads per site over 7 days on the overview, and lists them per day on the project page", async () => {
+    await db.upsertSiteReferrerDaily(env.DB, [
+      { site: SHILING_HOST, date: "2026-08-01", referrer: "chatgpt.com", pageviews: 3, visits: 3 },
+      { site: SHILING_HOST, date: "2026-08-02", referrer: "bing.com/copilotsearch", pageviews: 1, visits: 1 },
+      { site: SHILING_HOST, date: "2026-08-02", referrer: "bing.com", pageviews: 4, visits: 4 },
+      { site: SHILING_HOST, date: "2026-07-20", referrer: "perplexity.ai", pageviews: 2, visits: 2 }, // in the 30-day window, outside the 7-day one
+      { site: SHILING_HOST, date: "2026-08-03", referrer: "weixin110.qq.com", pageviews: 10, visits: 9 }
+    ]);
+
+    const overview = await (await call("GET", "/api/overview"))!.json<Overview>();
+    expect(overview.sites.find(s => s.site === SHILING_HOST)!.aiPageviews7d).toBe(4); // 07-28..08-03: chatgpt 3 + copilotsearch 1
+    expect(overview.siteSurfaces!.since).toBe("2026-07-20");
+    expect(overview.siteSurfaces!.surfaces.find(s => s.id === "ai")).toMatchObject({ views: 6, hosts: ["bing.com/copilotsearch", "chatgpt.com", "perplexity.ai"] });
+    expect(overview.siteSurfaces!.unclassified).toEqual([{ referrer: "weixin110.qq.com", views: 10, uniques: 9 }]);
+
+    const detail = await (await call("GET", "/api/project/shiling"))!.json<ProjectDetail>();
+    expect(detail.siteReferrals).toMatchObject({ host: SHILING_HOST, windowDays: 30, since: "2026-07-20" });
+    expect(detail.siteReferrals!.aiDaily).toEqual([
+      { date: "2026-08-02", referrer: "bing.com/copilotsearch", pageviews: 1, visits: 1 },
+      { date: "2026-08-01", referrer: "chatgpt.com", pageviews: 3, visits: 3 },
+      { date: "2026-07-20", referrer: "perplexity.ai", pageviews: 2, visits: 2 }
+    ]);
+    expect(detail.siteReferrals!.surfaces.surfaces.find(s => s.id === "search")).toMatchObject({ views: 4, hosts: ["bing.com"] });
+  });
+
+  it("has no site referrals for a project without a tracked homepage", async () => {
+    const noHome = CONFIG.projects.find(p => !p.homepage)!;
+    const detail = await (await call("GET", `/api/project/${noHome.name}`))!.json<ProjectDetail>();
+    expect(detail.siteReferrals).toBeNull();
+  });
+});

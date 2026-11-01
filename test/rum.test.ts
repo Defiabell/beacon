@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
-import { buildQuery, normalizeRum, fetchRumDaily } from "../src/collect/rum";
-import { upsertSiteDaily, getSiteTotals } from "../src/db";
+import { buildQuery, normalizeRum, fetchRumDaily, buildReferrerQuery, normalizeRumReferrers, fetchRumReferrers } from "../src/collect/rum";
+import { upsertSiteDaily, getSiteTotals, upsertSiteReferrerDaily, getSiteReferrerTotals, getSiteReferrerDaily, getSiteReferrerSince } from "../src/db";
 import { CONFIG, siteFor, siteHosts, type SiteConfig } from "../src/config";
 
 const SITES: SiteConfig[] = [
@@ -210,5 +210,119 @@ describe("site_daily storage", () => {
     expect(busy.lastDate).toBe("2026-02-10");
     // Busiest first.
     expect(totals.findIndex(t => t.site === "busy.test")).toBeLessThan(totals.findIndex(t => t.site === "quiet.test"));
+  });
+});
+
+// Shaped from a live query run on 2026-11-01 against the zone-level site:
+// self-referrals carry visits:0, external referrers carry visits == count,
+// and the odd row has a refererPath.
+const ZONE_REFERRER_SHAPE = {
+  data: {
+    viewer: {
+      accounts: [
+        {
+          s0: [
+            { count: 763, sum: { visits: 0 }, dimensions: { date: "2026-10-27", refererHost: "kaogu.defiabell.com", refererPath: "/", requestHost: "kaogu.defiabell.com" } },
+            { count: 69, sum: { visits: 69 }, dimensions: { date: "2026-10-27", refererHost: "", refererPath: "", requestHost: "kaogu.defiabell.com" } },
+            { count: 11, sum: { visits: 11 }, dimensions: { date: "2026-10-27", refererHost: "www.v2ex.com", refererPath: "/t/1252234", requestHost: "kaogu.defiabell.com" } },
+            { count: 4, sum: { visits: 4 }, dimensions: { date: "2026-10-27", refererHost: "bing.com", refererPath: "/", requestHost: "kaogu.defiabell.com" } },
+            { count: 2, sum: { visits: 2 }, dimensions: { date: "2026-10-27", refererHost: "www.bing.com", refererPath: "/copilotsearch", requestHost: "kaogu.defiabell.com" } },
+            { count: 3, sum: { visits: 3 }, dimensions: { date: "2026-10-27", refererHost: "chatgpt.com", refererPath: "/", requestHost: "kaogu.defiabell.com" } },
+            { count: 2, sum: { visits: 2 }, dimensions: { date: "2026-10-26", refererHost: "lost.defiabell.com", refererPath: "/", requestHost: "defiabell.com" } },
+            { count: 1, sum: { visits: 1 }, dimensions: { date: "2026-10-26", refererHost: "ChatGPT.com", refererPath: "", requestHost: "Kaogu.defiabell.com" } }
+          ]
+        }
+      ]
+    }
+  }
+};
+
+describe("buildReferrerQuery", () => {
+  it("asks for refererHost and refererPath on every alias, requestHost only on a zone", () => {
+    const q = buildReferrerQuery([SITES[0], ZONE]);
+    const [, s0, s1] = q.split(/s\d: /);
+    expect(s0).toContain("dimensions{date refererHost refererPath}");
+    expect(s1).toContain("dimensions{date refererHost refererPath requestHost}");
+    expect(q).toContain(SITES[0].siteTag);
+    expect(q).toContain(ZONE.siteTag);
+  });
+
+  it("refuses a malformed siteTag like buildQuery does", () => {
+    expect(() => buildReferrerQuery([{ name: "x", host: "x.test", siteTag: "nope" }])).toThrow(/invalid siteTag/);
+  });
+});
+
+describe("normalizeRumReferrers", () => {
+  it("keeps external referrers only, splits a zone by requestHost, and folds path labels", () => {
+    const rows = normalizeRumReferrers(ZONE_REFERRER_SHAPE, [ZONE]);
+    const kaogu = rows.filter(r => r.site === "kaogu.defiabell.com" && r.date === "2026-10-27");
+    // In-site navigation (kaogu -> kaogu) and direct arrivals (empty host) are
+    // not referrals and are dropped.
+    expect(kaogu.map(r => r.referrer).sort()).toEqual(["bing.com", "bing.com/copilotsearch", "chatgpt.com", "www.v2ex.com"]);
+    expect(kaogu.find(r => r.referrer === "bing.com/copilotsearch")).toEqual({ site: "kaogu.defiabell.com", date: "2026-10-27", referrer: "bing.com/copilotsearch", pageviews: 2, visits: 2 });
+    expect(kaogu.find(r => r.referrer === "bing.com")!.pageviews).toBe(4);
+    // Cross-host but still ours: an arrival, stored and later classified "own".
+    expect(rows).toContainEqual({ site: "defiabell.com", date: "2026-10-26", referrer: "lost.defiabell.com", pageviews: 2, visits: 2 });
+    // Hosts are lower-cased on both sides of the key.
+    expect(rows).toContainEqual({ site: "kaogu.defiabell.com", date: "2026-10-26", referrer: "chatgpt.com", pageviews: 1, visits: 1 });
+  });
+
+  it("sums raw rows that fold into the same label", () => {
+    const payload = { data: { viewer: { accounts: [{ s0: [
+      { count: 2, sum: { visits: 2 }, dimensions: { date: "2026-10-27", refererHost: "x.com", refererPath: "/i/grok?x=1" } },
+      { count: 3, sum: { visits: 1 }, dimensions: { date: "2026-10-27", refererHost: "x.com", refererPath: "/i/grok/share" } },
+      { count: 5, sum: { visits: 5 }, dimensions: { date: "2026-10-27", refererHost: "x.com", refererPath: "/" } }
+    ] }] } } };
+    expect(normalizeRumReferrers(payload, [SITES[0]])).toEqual([
+      { site: "defiabell.github.io", date: "2026-10-27", referrer: "x.com/i/grok", pageviews: 5, visits: 3 },
+      { site: "defiabell.github.io", date: "2026-10-27", referrer: "x.com", pageviews: 5, visits: 5 }
+    ]);
+  });
+
+  it("returns [] for every malformed envelope rather than throwing", () => {
+    for (const bad of [null, undefined, 7, "no", {}, { data: {} }, { data: { viewer: { accounts: [] } } }]) {
+      expect(normalizeRumReferrers(bad, SITES)).toEqual([]);
+    }
+  });
+});
+
+describe("fetchRumReferrers", () => {
+  it("throws on a GraphQL errors array and on a missing alias instead of recording no referrals", async () => {
+    const denied: typeof fetch = async () => Response.json({ errors: [{ message: "Authentication error" }] });
+    await expect(fetchRumReferrers(SITES, "acc", "tok", "2026-10-25", "2026-10-27", denied)).rejects.toThrow(/Authentication error/);
+    const partial: typeof fetch = async () => Response.json({ data: { viewer: { accounts: [{ s0: [] }] } } });
+    await expect(fetchRumReferrers(SITES, "acc", "tok", "2026-10-25", "2026-10-27", partial)).rejects.toThrow(/missing account or site data/);
+  });
+
+  it("makes no request when no sites are configured", async () => {
+    let called = 0;
+    const stub: typeof fetch = async () => { called++; return Response.json({}); };
+    expect(await fetchRumReferrers([], "acc", "tok", "2026-10-25", "2026-10-27", stub)).toEqual([]);
+    expect(called).toBe(0);
+  });
+});
+
+describe("site_referrer_daily storage", () => {
+  it("upserts per (site, date, referrer), totals a window, lists a site's days newest first, and knows its first day", async () => {
+    expect(await getSiteReferrerSince(env.DB)).toBeNull();
+    await upsertSiteReferrerDaily(env.DB, [
+      { site: "r.test", date: "2026-03-01", referrer: "chatgpt.com", pageviews: 1, visits: 1 },
+      { site: "r.test", date: "2026-03-02", referrer: "chatgpt.com", pageviews: 2, visits: 2 },
+      { site: "r.test", date: "2026-03-02", referrer: "v2ex.com", pageviews: 9, visits: 8 },
+      { site: "r.test", date: "2026-02-01", referrer: "chatgpt.com", pageviews: 50, visits: 50 } // outside the window
+    ]);
+    await upsertSiteReferrerDaily(env.DB, [{ site: "r.test", date: "2026-03-02", referrer: "chatgpt.com", pageviews: 3, visits: 3 }]);
+    const totals = await getSiteReferrerTotals(env.DB, 7, "2026-03-03");
+    expect(totals.filter(t => t.site === "r.test")).toEqual([
+      { site: "r.test", referrer: "v2ex.com", pageviews: 9, visits: 8 },
+      { site: "r.test", referrer: "chatgpt.com", pageviews: 4, visits: 4 }
+    ]);
+    const daily = await getSiteReferrerDaily(env.DB, "r.test", 7, "2026-03-03");
+    expect(daily.map(d => `${d.date} ${d.referrer} ${d.pageviews}`)).toEqual([
+      "2026-03-02 v2ex.com 9",
+      "2026-03-02 chatgpt.com 3",
+      "2026-03-01 chatgpt.com 1"
+    ]);
+    expect(await getSiteReferrerSince(env.DB)).toBe("2026-02-01");
   });
 });

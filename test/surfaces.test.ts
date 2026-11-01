@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { SURFACES, classifyReferrer } from "../src/surfaces";
-import { buildSurfaceBreakdown } from "../src/api/public";
+import { SURFACES, classifyReferrer, referrerLabel } from "../src/surfaces";
+import { buildSurfaceBreakdown, buildSiteSurfaceBreakdown } from "../src/api/public";
 import type { PeakReferrer } from "../src/db";
 
 const peak = (referrer: string, views: number, uniques: number, firstSeen = "2026-08-09", lastSeen = "2026-08-27"): PeakReferrer => ({
@@ -16,6 +16,21 @@ describe("classifyReferrer", () => {
     expect(classifyReferrer("chatgpt.com")).toBe("ai");
     expect(classifyReferrer("www.perplexity.ai")).toBe("ai");
     expect(classifyReferrer("gemini.google.com")).toBe("ai");
+    for (const host of ["chat.openai.com", "claude.ai", "copilot.microsoft.com", "grok.com", "duck.ai", "you.com"]) {
+      expect(classifyReferrer(host), host).toBe("ai");
+    }
+  });
+
+  it("places an AI product that lives under a search engine's path by its label, leaving the bare host on search", () => {
+    expect(classifyReferrer("bing.com/copilotsearch")).toBe("ai");
+    expect(classifyReferrer("bing.com")).toBe("search");
+    expect(classifyReferrer("x.com/i/grok")).toBe("ai");
+    expect(classifyReferrer("kagi.com/assistant")).toBe("ai");
+    expect(classifyReferrer("kagi.com")).toBe("search");
+    // Known gaps, counted as search because a referrer never carries the query
+    // string: Google AI Mode (udm=50) and duckduckgo.com's ?ia=chat.
+    expect(classifyReferrer("www.google.com")).toBe("search");
+    expect(classifyReferrer("duckduckgo.com")).toBe("search");
   });
 
   it("recognises search engines in GitHub's label form, not just as hostnames", () => {
@@ -101,5 +116,44 @@ describe("buildSurfaceBreakdown", () => {
 
   it("has no observation floor when nothing has been captured", () => {
     expect(buildSurfaceBreakdown(new Map()).since).toBeNull();
+  });
+});
+
+describe("referrerLabel", () => {
+  it("is the lower-cased host unless an AI path rule matches", () => {
+    expect(referrerLabel("WWW.V2EX.com", "/t/1252234")).toBe("www.v2ex.com");
+    expect(referrerLabel("bing.com", "/")).toBe("bing.com");
+    expect(referrerLabel("www.bing.com", "/copilotsearch?q=x")).toBe("bing.com/copilotsearch");
+    expect(referrerLabel("x.com", "/i/grok")).toBe("x.com/i/grok");
+    expect(referrerLabel("x.com", "/elonmusk")).toBe("x.com");
+    expect(referrerLabel("kagi.com", "/Assistant/abc")).toBe("kagi.com/assistant");
+    expect(referrerLabel("chatgpt.com", null)).toBe("chatgpt.com");
+  });
+
+  it("does not let a lookalike host borrow a path label", () => {
+    expect(referrerLabel("notbing.com", "/copilotsearch")).toBe("notbing.com");
+  });
+});
+
+describe("buildSiteSurfaceBreakdown", () => {
+  it("buckets site referrer rows into the same surfaces, pageviews as views and visits as uniques", () => {
+    const out = buildSiteSurfaceBreakdown([
+      { referrer: "chatgpt.com", pageviews: 3, visits: 3 },
+      { referrer: "bing.com/copilotsearch", pageviews: 2, visits: 2 },
+      { referrer: "bing.com", pageviews: 4, visits: 4 },
+      { referrer: "weixin110.qq.com", pageviews: 10, visits: 9 }
+    ], "2026-10-25");
+    expect(out.surfaces).toHaveLength(SURFACES.length);
+    const ai = out.surfaces.find(s => s.id === "ai")!;
+    expect(ai).toMatchObject({ views: 5, uniques: 5, hosts: ["bing.com/copilotsearch", "chatgpt.com"] });
+    expect(out.surfaces.find(s => s.id === "search")).toMatchObject({ views: 4, hosts: ["bing.com"] });
+    expect(out.unclassified).toEqual([{ referrer: "weixin110.qq.com", views: 10, uniques: 9 }]);
+    expect(out.since).toBe("2026-10-25");
+  });
+
+  it("emits a zero AI row rather than dropping it", () => {
+    const out = buildSiteSurfaceBreakdown([], null);
+    expect(out.surfaces.find(s => s.id === "ai")).toMatchObject({ views: 0, uniques: 0, hosts: [] });
+    expect(out.since).toBeNull();
   });
 });

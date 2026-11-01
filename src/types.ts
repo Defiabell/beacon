@@ -16,6 +16,10 @@ export interface ReferrerRow { referrer: string; count: number; uniques: number;
 export interface Post { id?: number; url: string; platform: Platform; project: string; title: string; publishedAt: string | null; }
 export interface PostMetrics { views: number | null; replies: number | null; likes: number | null; score: number | null; }
 export interface SiteDaily { site: string; date: string; pageviews: number; visitors: number; }
+// One external referrer's pageloads into one site on one day. `referrer` is a
+// src/surfaces.ts referrerLabel (host, or host/path-prefix). `visits` is RUM's
+// sum.visits — sessions started by this referrer, NOT unique people.
+export interface SiteReferrerDaily { site: string; date: string; referrer: string; pageviews: number; visits: number; }
 export interface CheckResult { checkId: string; status: "pass" | "fail" | "na"; detail: string; priority: 1 | 2 | 3; }
 // doneAt is only ever populated when status is "done" (set by setTodoStatus);
 // optional rather than required because getTopOpenTodos never selects it (its

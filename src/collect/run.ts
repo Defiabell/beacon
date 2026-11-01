@@ -4,7 +4,7 @@ import { fetchRepoMeta, fetchRepoTraffic } from "./github";
 import { fetchPostMetrics } from "./posts";
 import { fetchSiteDaily } from "./goatcounter";
 import { fetchWorkerDaily } from "./cloudflare";
-import { fetchRumDaily } from "./rum";
+import { fetchRumDaily, fetchRumReferrers } from "./rum";
 import { fetchPagesFunctionsDaily, fetchPagesProjects, resolvePagesFunctionsToWorkerDaily } from "./pages";
 import { runAudit } from "../audit/run";
 import { CONFIG, siteHosts } from "../config";
@@ -15,6 +15,7 @@ import {
   listPosts,
   upsertPostMetrics,
   upsertSiteDaily,
+  upsertSiteReferrerDaily,
   upsertWorkerDaily,
   recordSourceRun
 } from "../db";
@@ -204,6 +205,19 @@ async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<Sou
     }
   }
   await upsertSiteDaily(env.DB, [...byKey.values()]);
+  // Second subrequest: the same days split by referring host, for the
+  // site-side surface breakdown (src/surfaces.ts). Runs after the totals have
+  // landed so a referrer-query failure costs the day's referrer rows, never
+  // its pageview totals; the source still records ok:false so it is seen.
+  const referrers = await fetchRumReferrers(
+    CONFIG.sites,
+    env.CLOUDFLARE_ACCOUNT_ID,
+    env.CLOUDFLARE_API_TOKEN,
+    dates[0],
+    dates[2],
+    fetchFn
+  );
+  await upsertSiteReferrerDaily(env.DB, referrers);
   return { ok: true };
 }
 

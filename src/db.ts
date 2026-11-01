@@ -5,6 +5,7 @@ import type {
   Post,
   PostMetrics,
   SiteDaily,
+  SiteReferrerDaily,
   CheckResult,
   Todo,
   SourceRun
@@ -192,6 +193,61 @@ export async function upsertSiteDaily(db: D1Database, rows: SiteDaily[]): Promis
        pageviews=excluded.pageviews, visitors=excluded.visitors`
   );
   await db.batch(rows.map(r => stmt.bind(r.site, r.date, r.pageviews, r.visitors)));
+}
+
+export async function upsertSiteReferrerDaily(db: D1Database, rows: SiteReferrerDaily[]): Promise<void> {
+  if (rows.length === 0) return;
+  const stmt = db.prepare(
+    `INSERT INTO site_referrer_daily (site, date, referrer, pageviews, visits)
+     VALUES (?1,?2,?3,?4,?5)
+     ON CONFLICT (site, date, referrer) DO UPDATE SET
+       pageviews=excluded.pageviews, visits=excluded.visits`
+  );
+  await db.batch(rows.map(r => stmt.bind(r.site, r.date, r.referrer, r.pageviews, r.visits)));
+}
+
+export interface SiteReferrerTotal {
+  site: string;
+  referrer: string;
+  pageviews: number;
+  visits: number;
+}
+
+// Every (site, referrer) pair with its pageloads over the last `days` complete
+// UTC days. Classification into surfaces happens in the caller
+// (src/api/public.ts) so the stored referrer label is never lost — an
+// unrecognised host is the most useful row on the page.
+export async function getSiteReferrerTotals(
+  db: D1Database, days: number, today = new Date().toISOString().slice(0, 10)
+): Promise<SiteReferrerTotal[]> {
+  const res = await db.prepare(
+    `SELECT site, referrer, SUM(pageviews) AS pageviews, SUM(visits) AS visits
+     FROM site_referrer_daily
+     WHERE date >= date(?2, '-' || ?1 || ' days') AND date < ?2
+     GROUP BY site, referrer ORDER BY pageviews DESC`
+  ).bind(days, today).all<SiteReferrerTotal>();
+  return res.results;
+}
+
+// Per-day referrer rows for one site over the last `days` complete UTC days,
+// most recent first. Used by the project page's AI-referral list.
+export async function getSiteReferrerDaily(
+  db: D1Database, site: string, days: number, today = new Date().toISOString().slice(0, 10)
+): Promise<SiteReferrerDaily[]> {
+  const res = await db.prepare(
+    `SELECT site, date, referrer, pageviews, visits FROM site_referrer_daily
+     WHERE site=?1 AND date >= date(?3, '-' || ?2 || ' days') AND date < ?3
+     ORDER BY date DESC, pageviews DESC`
+  ).bind(site, days, today).all<SiteReferrerDaily>();
+  return res.results;
+}
+
+// Earliest day any referrer row exists for: everything in site_referrer_daily
+// is bounded by when this collector started, and a reader needs to know that
+// "0 from AI engines" covers N days, not forever. null before the first run.
+export async function getSiteReferrerSince(db: D1Database): Promise<string | null> {
+  const row = await db.prepare(`SELECT MIN(date) AS since FROM site_referrer_daily`).first<{ since: string | null }>();
+  return row?.since ?? null;
 }
 
 // Cloudflare's analytics API restates the last few days as data settles, so

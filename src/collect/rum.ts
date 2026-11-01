@@ -1,6 +1,7 @@
-import type { SiteDaily } from "../types";
+import type { SiteDaily, SiteReferrerDaily } from "../types";
 import type { FetchFn } from "./github";
 import { isZoneSite, type SiteConfig } from "../config";
+import { referrerLabel } from "../surfaces";
 
 // Daily pageviews per site from Cloudflare Web Analytics (RUM).
 //
@@ -143,4 +144,114 @@ export async function fetchRumDaily(
     }
   }
   return normalizeRum(payload, sites);
+}
+
+// ---- referrers --------------------------------------------------------------
+//
+// A second query over the same dataset, split by refererHost (+ refererPath,
+// see src/surfaces.ts referrerLabel). Separate from buildQuery rather than
+// added as dimensions to it: the daily totals must stay one row per (host,
+// day) so a referrer-cardinality blow-up can never truncate them, and the two
+// queries cost one subrequest each either way.
+//
+// Why this exists: JS-based analytics only ever see humans who arrive with a
+// Referer header, and that is exactly the one place an AI answer engine's
+// contribution is measurable. The repo-side surfaces (GitHub's referrers) have
+// read "AI 答案引擎: 0" since launch; this is the site-side half of that
+// question. Measured 2026-11-01 on the zone-level site: refererHost is
+// populated (www.v2ex.com, github.com, bing.com, weixin110.qq.com) and the
+// odd row carries a refererPath, so host-level classification is real.
+export function buildReferrerQuery(sites: SiteConfig[]): string {
+  const parts = sites.map((s, i) => {
+    if (!SITE_TAG.test(s.siteTag)) throw new Error(`invalid siteTag for ${s.host}: ${s.siteTag}`);
+    const zone = isZoneSite(s);
+    // Rows are (referrer × day), or (host × referrer × day) for a zone, so the
+    // limit is sized a few times above the daily query's.
+    return (
+      `s${i}: rumPageloadEventsAdaptiveGroups(limit:${zone ? 3000 : 600}, ` +
+      `filter:{siteTag:"${s.siteTag}", date_geq:$start, date_leq:$end}, orderBy:[count_DESC])` +
+      `{ count sum{visits} dimensions{date refererHost refererPath${zone ? " requestHost" : ""}} }`
+    );
+  });
+  return `query($acc:String!,$start:Date!,$end:Date!){viewer{accounts(filter:{accountTag:$acc}){${parts.join(" ")}}}}`;
+}
+
+interface RumReferrerRow {
+  count?: unknown;
+  sum?: { visits?: unknown };
+  dimensions?: { date?: unknown; requestHost?: unknown; refererHost?: unknown; refererPath?: unknown };
+}
+
+// Pure and exported, same reason as normalizeRum. Rows with no referrer
+// (direct / typed-in / privacy-stripped) and rows whose referrer is the site
+// itself (in-site navigation) are dropped: neither is an arrival from
+// somewhere, and storing them would only put a meaningless "(direct)" row on
+// every surface table. Several raw rows can fold into one label (bing.com with
+// two different paths), so counts are summed per (site, date, label).
+export function normalizeRumReferrers(payload: unknown, sites: SiteConfig[]): SiteReferrerDaily[] {
+  if (typeof payload !== "object" || payload === null) return [];
+  const accounts = (payload as { data?: { viewer?: { accounts?: unknown } } }).data?.viewer?.accounts;
+  if (!Array.isArray(accounts) || accounts.length === 0) return [];
+  const acct = accounts[0] as Record<string, unknown>;
+
+  const out = new Map<string, SiteReferrerDaily>();
+  sites.forEach((site, i) => {
+    const rows = acct[`s${i}`];
+    if (!Array.isArray(rows)) return;
+    for (const raw of rows as RumReferrerRow[]) {
+      const date = raw?.dimensions?.date;
+      if (typeof date !== "string") continue;
+      const refHost = raw?.dimensions?.refererHost;
+      if (typeof refHost !== "string" || refHost === "") continue;
+      let host = site.host;
+      if (isZoneSite(site)) {
+        const rh = raw?.dimensions?.requestHost;
+        if (typeof rh !== "string" || rh === "") continue;
+        host = rh.toLowerCase();
+      }
+      const refPath = raw?.dimensions?.refererPath;
+      const referrer = referrerLabel(refHost, typeof refPath === "string" ? refPath : null);
+      if (referrer === host) continue;
+      const key = `${host}\u0000${date}\u0000${referrer}`;
+      const prev = out.get(key) ?? { site: host, date, referrer, pageviews: 0, visits: 0 };
+      prev.pageviews += num(raw?.count);
+      prev.visits += num(raw?.sum?.visits);
+      out.set(key, prev);
+    }
+  });
+  return [...out.values()];
+}
+
+// Same failure contract as fetchRumDaily: a GraphQL `errors` array or a missing
+// alias throws rather than being read as "no referrers".
+export async function fetchRumReferrers(
+  sites: SiteConfig[],
+  accountId: string,
+  token: string,
+  startDate: string,
+  endDate: string,
+  fetchFn: FetchFn = fetch
+): Promise<SiteReferrerDaily[]> {
+  if (sites.length === 0) return [];
+  const res = await fetchFn(ENDPOINT, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query: buildReferrerQuery(sites),
+      variables: { acc: accountId, start: startDate, end: endDate }
+    })
+  });
+  if (!res.ok) throw new Error(`cloudflare rum referrers graphql ${res.status}`);
+  const payload = await res.json<unknown>();
+  const errors = (payload as { errors?: unknown }).errors;
+  if (Array.isArray(errors) && errors.length > 0) {
+    const first = errors[0] as { message?: unknown };
+    throw new Error(`cloudflare rum referrers error: ${typeof first?.message === "string" ? first.message : "unknown"}`);
+  }
+  const accounts = (payload as { data?: { viewer?: { accounts?: Record<string, unknown>[] } } }).data?.viewer?.accounts;
+  if (!Array.isArray(accounts) || accounts.length !== 1 ||
+      sites.some((_, i) => !Array.isArray(accounts[0]?.[`s${i}`]))) {
+    throw new Error("cloudflare rum referrers response missing account or site data");
+  }
+  return normalizeRumReferrers(payload, sites);
 }

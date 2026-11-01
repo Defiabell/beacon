@@ -5,7 +5,7 @@ import { ghHeaders } from "../collect/github";
 import { CONFIG } from "../config";
 import { AUDIT_MINUTES } from "../schedule";
 import { upsertAuditResults, insertTodoIfNew, reopenTodoByTitle, closeTodoByTitle } from "../db";
-import type { RepoAuditInput } from "./checks";
+import type { RepoAuditInput, WellKnownFile, WellKnownProbe } from "./checks";
 import { runRepoChecks, todoTitle } from "./checks";
 
 const USER_AGENT = "beacon (+https://github.com/Defiabell/beacon)";
@@ -30,6 +30,12 @@ const MAX_LINKS_CHECKED = 3;
 // reading releaseAssetCount there, so fetching it was pure waste).
 const AUDIT_BASE_FETCHES = 3;
 
+// Well-known files probed on the project's homepage origin: robots.txt, the
+// sitemap robots.txt declares (else /sitemap.xml), and llms.txt. Exactly one
+// GET each, no HEAD — a HEAD that 404s would need the same GET fallback the
+// link check has, doubling the worst case for no information gain.
+const WELL_KNOWN_FETCHES = 3;
+
 // The Workers free tier caps an invocation at 50 subrequests (Cloudflare's
 // documented limit). Overrunning it fails the offending fetch rather than
 // returning a partial result, and runSource (src/collect/run.ts) turns that
@@ -50,7 +56,26 @@ export function auditWorstCaseSubrequests(projects: ProjectConfig[]): number {
 
 // Worst-case subrequests for auditing one repo on its own.
 export function projectAuditCost(p: ProjectConfig): number {
-  return AUDIT_BASE_FETCHES + (p.tags.includes("macos") ? 1 : 0) + MAX_LINKS_CHECKED * 2;
+  return (
+    AUDIT_BASE_FETCHES +
+    (p.tags.includes("macos") ? 1 : 0) +
+    MAX_LINKS_CHECKED * 2 +
+    (wellKnownOrigin(p) ? WELL_KNOWN_FETCHES : 0)
+  );
+}
+
+// The origin whose well-known files get probed, or null when there is nothing
+// a Worker can check: no homepage, an unparsable one, or a *.workers.dev
+// address (unreachable from Workers egress — see isWorkersDevHosted).
+export function wellKnownOrigin(p: ProjectConfig): string | null {
+  if (!p.homepage) return null;
+  try {
+    const u = new URL(p.homepage);
+    if (!isCheckableHost(p.homepage) || isWorkersDevHosted(p.homepage)) return null;
+    return u.origin;
+  } catch {
+    return null;
+  }
 }
 
 // Splits the fleet into contiguous groups, each of which fits inside one
@@ -300,6 +325,55 @@ async function findBrokenLinks(readme: string, fetchFn: FetchFn): Promise<string
   return checked.filter(c => c.broken).map(c => c.url);
 }
 
+// One GET, headers only consumed unless `readBody`. Redirects are followed so
+// the verdict is about what a crawler finally receives (yixi's /llms.txt
+// answers 303 first). A transport failure becomes status null — "could not
+// look", which checkWellKnown turns into n/a rather than a todo.
+async function probeWellKnownFile(url: string, fetchFn: FetchFn, readBody: boolean): Promise<WellKnownFile> {
+  try {
+    const res = await fetchFn(url, { method: "GET", headers: { "User-Agent": USER_AGENT, Accept: "text/plain, */*" } });
+    const file: WellKnownFile = { url, status: res.status, contentType: res.headers.get("content-type") };
+    if (readBody) {
+      const text = await res.text();
+      file.hasSitemapLine = /^\s*sitemap\s*:/im.test(text);
+      file.sitemapUrl = text.match(/^\s*sitemap\s*:\s*(\S+)/im)?.[1] ?? null;
+    } else {
+      await res.body?.cancel();
+    }
+    return file;
+  } catch (e) {
+    return { url, status: null, contentType: null, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// The sitemap to probe: what robots.txt declares, else /sitemap.xml on the
+// same origin. A declared sitemap on another host is probed on the homepage
+// origin at the same path instead — shotsync's robots.txt still points at its
+// old *.workers.dev address, which a Worker cannot fetch, and the check is
+// about this site serving a real sitemap, not about the URL spelling.
+export function sitemapUrlFor(origin: string, declared: string | null | undefined): string {
+  if (declared) {
+    try {
+      const u = new URL(declared, origin);
+      return `${origin}${u.pathname}${u.search}`;
+    } catch {
+      // fall through to the default
+    }
+  }
+  return `${origin}/sitemap.xml`;
+}
+
+// Exactly WELL_KNOWN_FETCHES subrequests: robots.txt first (its Sitemap: line
+// decides the second URL), then the sitemap and llms.txt in parallel.
+export async function collectWellKnown(origin: string, fetchFn: FetchFn): Promise<WellKnownProbe> {
+  const robots = await probeWellKnownFile(`${origin}/robots.txt`, fetchFn, true);
+  const [sitemap, llms] = await Promise.all([
+    probeWellKnownFile(sitemapUrlFor(origin, robots.sitemapUrl), fetchFn, false),
+    probeWellKnownFile(`${origin}/llms.txt`, fetchFn, false)
+  ]);
+  return { robots, sitemap, llms };
+}
+
 export async function collectAuditInput(
   token: string,
   project: ProjectConfig,
@@ -318,7 +392,11 @@ export async function collectAuditInput(
     needsReleases ? fetchReleaseAssetCount(token, project.repo, fetchFn) : Promise.resolve(0),
     fetchOgImage(project.repo, fetchFn)
   ]);
-  const brokenLinks = await findBrokenLinks(readme, fetchFn);
+  const origin = wellKnownOrigin(project);
+  const [brokenLinks, wellKnown] = await Promise.all([
+    findBrokenLinks(readme, fetchFn),
+    origin ? collectWellKnown(origin, fetchFn) : Promise.resolve(null)
+  ]);
   return {
     project: project.name,
     tags: project.tags,
@@ -328,7 +406,8 @@ export async function collectAuditInput(
     readme,
     releaseAssetCount,
     ogImageUrl,
-    brokenLinks
+    brokenLinks,
+    wellKnown
   };
 }
 

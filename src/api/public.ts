@@ -22,6 +22,9 @@ import {
   getPeakReferrers,
   getWorkerTotals,
   getSiteTotals,
+  getSiteReferrerTotals,
+  getSiteReferrerDaily,
+  getSiteReferrerSince,
   listPosts,
   listPostsForImpact,
   latestPostMetrics,
@@ -32,7 +35,8 @@ import {
   listAuditResults,
   type PostForImpact,
   type PeakReferrer,
-  type SiteTotal
+  type SiteTotal,
+  type SiteReferrerTotal
 } from "../db";
 import {
   shiftDate,
@@ -49,6 +53,11 @@ import {
 const REPO_SERIES_SUMMARY_DAYS = 14;
 const REPO_SERIES_DETAIL_DAYS = 90;
 const SITE_PV_WINDOW_DAYS = 7;
+// Site-side referrer window. Longer than the pageview window on purpose: an AI
+// answer engine sends a handful of visits a month, and a 7-day window would
+// read 0 most weeks even once they have started — exactly the "it's always 3"
+// trap this was built to get out of.
+const SITE_REFERRER_WINDOW_DAYS = 30;
 const STAR_DELTA_WINDOW_DAYS = 7;
 const TOP_TODOS_LIMIT = 5;
 const TOP_REFERRERS_LIMIT = 5;
@@ -89,6 +98,12 @@ export interface WorkerTotal {
   coverage?: MetricCoverage;
 }
 
+// A site row on the overview: the 7-day totals plus how many of those
+// pageloads arrived from an AI answer engine (src/surfaces.ts "ai"). null until
+// the referrer collector has run at least once — before that, 0 would be a
+// claim about traffic nobody was watching.
+export type SiteRow = SiteTotal & { coverage?: MetricCoverage; aiPageviews7d?: number | null };
+
 export interface Overview {
   projects: ProjectSummary[];
   topTodos: Todo[];
@@ -97,7 +112,12 @@ export interface Overview {
   sitePv7d: number | null;
   surfaces: SurfaceBreakdown;
   workers: WorkerTotal[];
-  sites: (SiteTotal & { coverage?: MetricCoverage })[];
+  sites: SiteRow[];
+  // Where SITE visitors came from (Cloudflare RUM referrers), the same buckets
+  // as `surfaces` but for the sites instead of the repos. Optional only so
+  // Overview literals written before this field keep typechecking; always
+  // populated by buildOverview.
+  siteSurfaces?: SurfaceBreakdown;
 }
 
 export interface PostWithMetrics {
@@ -158,6 +178,18 @@ function utcToday(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Site-side referrers for the project's homepage host (null when the project
+// has no homepage, or its host is not a tracked site). Per-day AI rows are
+// listed individually — this is the number GEO work is measured by, and at the
+// volumes involved each day's row is readable.
+export interface ProjectSiteReferrals {
+  host: string;
+  windowDays: number;
+  since: string | null;
+  surfaces: SurfaceBreakdown;
+  aiDaily: { date: string; referrer: string; pageviews: number; visits: number }[];
+}
+
 export interface ProjectDetail {
   summary: ProjectSummary;
   repoSeries: RepoDaily[];
@@ -165,6 +197,8 @@ export interface ProjectDetail {
   referrers: ReferrerRow[];
   posts: PostWithMetrics[];
   audit: (CheckResult & { checkedAt: string })[];
+  // Optional for the same reason `events` is. Always set by buildProjectDetail.
+  siteReferrals?: ProjectSiteReferrals | null;
   // Optional (rather than required) so existing ProjectDetail literals built
   // before this feature — tests, mainly — keep typechecking without every one
   // of them needing an `events: []`. Always populated (possibly []) by
@@ -467,9 +501,17 @@ export async function buildOverview(env: Env): Promise<Overview> {
   for (const host of CONFIG.sites.flatMap(siteHosts)) {
     if (!siteRows.some(s => s.site === host)) siteRows.push({ site: host, pageviews: null, visitors: null, days: 0, lastDate: null });
   }
-  const sites = siteRows.map(s => ({ ...s, coverage: metricCoverage(SITE_PV_WINDOW_DAYS, s.days, s.lastDate, today,
-    sources.find(r => r.source === (siteFor(CONFIG.sites, s.site) ? 'rum' : 'goatcounter'))) }));
-  const sitePv7d = sites.length > 0 && sites.every(s => s.coverage.status === 'complete')
+  const [referrerSince, referrers7d, referrers30d] = await Promise.all([
+    getSiteReferrerSince(db),
+    getSiteReferrerTotals(db, SITE_PV_WINDOW_DAYS, today),
+    getSiteReferrerTotals(db, SITE_REFERRER_WINDOW_DAYS, today)
+  ]);
+  const sites: SiteRow[] = siteRows.map(s => ({ ...s, coverage: metricCoverage(SITE_PV_WINDOW_DAYS, s.days, s.lastDate, today,
+    sources.find(r => r.source === (siteFor(CONFIG.sites, s.site) ? 'rum' : 'goatcounter'))),
+    aiPageviews7d: referrerSince === null ? null : referrers7d
+      .filter(r => r.site === s.site && classifyReferrer(r.referrer) === "ai")
+      .reduce((total, r) => total + r.pageviews, 0) }));
+  const sitePv7d = sites.length > 0 && sites.every(s => s.coverage!.status === 'complete')
     ? sites.reduce((total, s) => total + (s.pageviews ?? 0), 0) : null;
   return {
     projects,
@@ -479,7 +521,8 @@ export async function buildOverview(env: Env): Promise<Overview> {
     sitePv7d,
     surfaces: buildSurfaceBreakdown(peaksByProject),
     workers,
-    sites
+    sites,
+    siteSurfaces: buildSiteSurfaceBreakdown(referrers30d, referrerSince)
   };
 }
 
@@ -513,8 +556,78 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   // only repo_daily needed the separate unbounded fetch (repoDailyAll).
   const events = buildEvents(eventInputs.postRows, eventInputs.todoInputs).filter(e => e.project === project.name);
   const projectEvents = events.map(e => computeImpact(e, repoDailyAll, starSeries));
+  const siteReferrals = await buildProjectSiteReferrals(db, project, today);
 
-  return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents };
+  return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents, siteReferrals };
+}
+
+// The homepage's hostname, when it is one of the sites RUM tracks. A project
+// without a homepage, or whose host beacon does not collect, has no site-side
+// referrers to show — null, not an empty breakdown pretending to be a zero.
+function trackedHomepageHost(project: ProjectConfig): string | null {
+  if (!project.homepage) return null;
+  let host: string;
+  try {
+    host = new URL(project.homepage).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+  return siteFor(CONFIG.sites, host) ? host : null;
+}
+
+async function buildProjectSiteReferrals(db: D1Database, project: ProjectConfig, today: string): Promise<ProjectSiteReferrals | null> {
+  const host = trackedHomepageHost(project);
+  if (!host) return null;
+  const [since, daily] = await Promise.all([
+    getSiteReferrerSince(db),
+    getSiteReferrerDaily(db, host, SITE_REFERRER_WINDOW_DAYS, today)
+  ]);
+  const totals = new Map<string, SiteReferrerTotal>();
+  for (const r of daily) {
+    const prev = totals.get(r.referrer) ?? { site: host, referrer: r.referrer, pageviews: 0, visits: 0 };
+    prev.pageviews += r.pageviews;
+    prev.visits += r.visits;
+    totals.set(r.referrer, prev);
+  }
+  return {
+    host,
+    windowDays: SITE_REFERRER_WINDOW_DAYS,
+    since,
+    surfaces: buildSiteSurfaceBreakdown([...totals.values()], since),
+    aiDaily: daily
+      .filter(r => classifyReferrer(r.referrer) === "ai")
+      .map(r => ({ date: r.date, referrer: r.referrer, pageviews: r.pageviews, visits: r.visits }))
+  };
+}
+
+// Site-side twin of buildSurfaceBreakdown: same buckets, fed by Cloudflare RUM
+// referrer rows instead of GitHub referrer peaks. `views` is pageloads and
+// `uniques` is RUM visits (sessions), reusing SurfaceRow so one renderer serves
+// both — the UI labels the units.
+export function buildSiteSurfaceBreakdown(rows: Pick<SiteReferrerTotal, "referrer" | "pageviews" | "visits">[], since: string | null): SurfaceBreakdown {
+  const totals = new Map<SurfaceId, { views: number; uniques: number; hosts: Set<string> }>();
+  const unclassified = new Map<string, { views: number; uniques: number }>();
+  for (const r of rows) {
+    const id = classifyReferrer(r.referrer);
+    if (id === null) {
+      const prev = unclassified.get(r.referrer) ?? { views: 0, uniques: 0 };
+      unclassified.set(r.referrer, { views: prev.views + r.pageviews, uniques: prev.uniques + r.visits });
+      continue;
+    }
+    const prev = totals.get(id) ?? { views: 0, uniques: 0, hosts: new Set<string>() };
+    prev.views += r.pageviews;
+    prev.uniques += r.visits;
+    prev.hosts.add(r.referrer);
+    totals.set(id, prev);
+  }
+  return {
+    surfaces: SURFACES.map(s => {
+      const t = totals.get(s.id);
+      return { id: s.id, name: s.name, note: s.note, views: t?.views ?? 0, uniques: t?.uniques ?? 0, hosts: t ? [...t.hosts].sort() : [] };
+    }),
+    unclassified: [...unclassified].map(([referrer, v]) => ({ referrer, ...v })).sort((a, b) => b.views - a.views),
+    since
+  };
 }
 
 export interface SurfaceRow {

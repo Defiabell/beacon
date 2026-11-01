@@ -1013,3 +1013,46 @@ describe("renderPosts with stale metrics", () => {
     expect(html).not.toContain("num stale");
   });
 });
+
+describe("site referrals on the dashboard", () => {
+  const base: Overview = { projects: [], topTodos: [], suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES, workers: [], sites: [] };
+  const siteRow = (aiPageviews7d: number | null | undefined) => ({ site: "shiling.defiabell.com", pageviews: 40, visitors: 30, days: 7, lastDate: "2026-08-03", aiPageviews7d });
+
+  it("shows the per-site AI referral chip, including at zero, and hides it before the collector has run", () => {
+    expect(renderOverview({ ...base, sites: [siteRow(3)] }, false)).toContain("AI 引荐 3");
+    expect(renderOverview({ ...base, sites: [siteRow(0)] }, false)).toContain("AI 引荐 0");
+    expect(renderOverview({ ...base, sites: [siteRow(null)] }, false)).not.toContain("AI 引荐");
+    expect(renderOverview({ ...base, sites: [siteRow(undefined)] }, false)).not.toContain("AI 引荐");
+  });
+
+  it("renders the site-side surface section with its own heading and the known blind spots, only when provided", () => {
+    const siteSurfaces: SurfaceBreakdown = {
+      surfaces: [{ id: "ai", name: "AI 答案引擎", note: "n", views: 5, uniques: 5, hosts: ["chatgpt.com"] }],
+      unclassified: [{ referrer: "weixin110.qq.com", views: 10, uniques: 9 }],
+      since: "2026-10-25"
+    };
+    const html = renderOverview({ ...base, siteSurfaces }, false);
+    expect(html).toContain("网站访客来自哪种地方");
+    expect(html).toContain("自 2026-10-25 起观测");
+    expect(html).toContain("udm=50");
+    expect(html).toContain("weixin110.qq.com 10/9");
+    expect(renderOverview(base, false)).not.toContain("网站访客来自哪种地方");
+  });
+
+  it("project page lists AI arrivals per day, says so when there are none, and explains an untracked site", () => {
+    const detail: ProjectDetail = { summary: summary(), repoSeries: [], starSeries: [], referrers: [], posts: [], audit: [] };
+    const surfaces: SurfaceBreakdown = { surfaces: [{ id: "ai", name: "AI 答案引擎", note: "n", views: 4, uniques: 4, hosts: ["chatgpt.com", "bing.com/copilotsearch"] }], unclassified: [], since: "2026-10-25" };
+    const withAi = renderProject("shiling", { ...detail, siteReferrals: { host: "shiling.defiabell.com", windowDays: 30, since: "2026-10-25", surfaces,
+      aiDaily: [{ date: "2026-10-27", referrer: "chatgpt.com", pageviews: 3, visits: 3 }, { date: "2026-10-26", referrer: "bing.com/copilotsearch", pageviews: 1, visits: 1 }] } }, false);
+    expect(withAi).toContain("站点引荐 · shiling.defiabell.com");
+    expect(withAi).toContain("AI 引荐 · 按天（共 4）");
+    expect(withAi).toContain("<td>2026-10-27</td><td>chatgpt.com</td><td class=\"num\">3</td>");
+    expect(withAi).toContain("<td>2026-10-26</td><td>bing.com/copilotsearch</td>");
+
+    const none = renderProject("shiling", { ...detail, siteReferrals: { host: "shiling.defiabell.com", windowDays: 30, since: "2026-10-25", surfaces: { ...surfaces, surfaces: [] }, aiDaily: [] } }, false);
+    expect(none).toContain("自 2026-10-25 起没有来自 AI 答案引擎的访问");
+
+    expect(renderProject("reading-room", { ...detail, siteReferrals: null }, false)).toContain("没有被 Web Analytics 跟踪的站点");
+    expect(renderProject("reading-room", detail, false)).not.toContain("站点引荐");
+  });
+});

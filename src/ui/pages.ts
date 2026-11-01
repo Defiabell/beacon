@@ -8,8 +8,7 @@ import type { MetricCoverage } from "../metrics";
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SurfaceBreakdown, WorkerTotal } from "../api/public";
-import type { SiteTotal } from "../db";
+import type { Overview, ProjectDetail, ProjectSiteReferrals, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SiteRow, SurfaceBreakdown, WorkerTotal } from "../api/public";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, EventAttribution, ImpactWindow } from "../impact/attribute";
@@ -30,7 +29,8 @@ const CHECK_LABELS: Record<string, string> = {
   "release-assets": "Release 产物",
   "readme-links": "README 链接可用",
   "social-preview": "social preview 图",
-  homepage: "homepage 字段"
+  homepage: "homepage 字段",
+  "well-known": "robots / sitemap / llms.txt"
 };
 
 function sourceLabel(s: string): string {
@@ -201,6 +201,31 @@ ${coverageNote(p.trafficCoverage)}${p.starsAsOf ? `<p class="sub">Star 快照：
 // finding, and dropping empty rows would hide exactly the row this was built
 // to show.
 function surfacesSection(s: SurfaceBreakdown): string {
+  const since = s.since ? `自 ${esc(s.since)} 起观测` : "尚无观测数据";
+  return surfaceList(
+    "流量来自哪种地方",
+    `GitHub 引荐来源按性质归类（访问 / 独立访客，取 14 天滚动窗口的历史峰值）。${since}——更早的流量 GitHub 已不再提供，无法回溯。`,
+    s,
+    "未归类来源（新出现的地方，或有人在抓你——按名字看，不要当成一个\"其他\"合计）："
+  );
+}
+
+// The site-side twin: where visitors to the SITES came from, out of Cloudflare
+// Web Analytics' referrer host. This is the only place an AI answer engine's
+// contribution can be measured — a JS beacon sees humans who click through, so
+// the AI row here is the GEO scoreboard, and a 0 on it is the finding.
+function siteSurfacesSection(s: SurfaceBreakdown | undefined): string {
+  if (!s) return "";
+  const since = s.since ? `自 ${esc(s.since)} 起观测` : "尚无观测数据——引荐采集还没跑过";
+  return surfaceList(
+    "网站访客来自哪种地方",
+    `Cloudflare Web Analytics 的引荐来源，按性质归类（浏览 / 访问，最近 30 个完整 UTC 日合计）。${since}。只看得到带 Referer 点进来的人；无 JS 的 AI 爬虫抓取不在此列。Google AI 模式（udm=50）与 duckduckgo.com 上的 AI 聊天靠查询串区分，Referer 里没有，仍计入搜索引擎。`,
+    s,
+    "未归类来源（按名字看，不要当成一个\"其他\"合计）："
+  );
+}
+
+function surfaceList(title: string, sub: string, s: SurfaceBreakdown, unknownIntro: string): string {
   const rows = s.surfaces
     .map(r => {
       const hosts = r.hosts.length ? `<span class="src">${esc(r.hosts.slice(0, 4).join(" · "))}${r.hosts.length > 4 ? " …" : ""}</span>` : "";
@@ -216,7 +241,7 @@ function surfacesSection(s: SurfaceBreakdown): string {
   // surface worth adding or someone scraping the repo, and both only get
   // noticed if the name is on the page rather than folded into an "其他" total.
   const unknown = s.unclassified.length
-    ? `<p class="sub" style="margin-top:10px">未归类来源（新出现的地方，或有人在抓你——按名字看，不要当成一个"其他"合计）：` +
+    ? `<p class="sub" style="margin-top:10px">${unknownIntro}` +
       s.unclassified
         .slice(0, 10)
         .map(u => `${esc(u.referrer)} ${u.views}/${u.uniques}`)
@@ -224,10 +249,9 @@ function surfacesSection(s: SurfaceBreakdown): string {
       `</p>`
     : "";
 
-  const since = s.since ? `自 ${esc(s.since)} 起观测` : "尚无观测数据";
   return `<section class="actions">
-<h2>流量来自哪种地方</h2>
-<p class="sub">GitHub 引荐来源按性质归类（访问 / 独立访客，取 14 天滚动窗口的历史峰值）。${since}——更早的流量 GitHub 已不再提供，无法回溯。</p>
+<h2>${esc(title)}</h2>
+<p class="sub">${sub}</p>
 <ul class="plain">${rows}</ul>
 ${unknown}
 </section>`;
@@ -240,7 +264,7 @@ ${unknown}
 //
 // 一个条目对应一个 hostname，这是 Web Analytics 划分站点的方式 ——
 // defiabell.github.io 一行同时包含博客和 /nightide/ 下的游戏。
-function sitesSection(sites: (SiteTotal & { coverage?: MetricCoverage })[]): string {
+function sitesSection(sites: SiteRow[]): string {
   if (sites.length === 0) {
     return `<section class="actions"><h2>网站访问量</h2>
 <p class="sub">暂无数据。Cloudflare Web Analytics 采集尚未运行，或站点刚接入还没攒够一天。</p></section>`;
@@ -251,9 +275,14 @@ function sitesSection(sites: (SiteTotal & { coverage?: MetricCoverage })[]): str
       // A zone-level entry names the zone, not the host under it; the host is
       // the more useful label there, and the zone name goes in the tooltip.
       const label = !cfg || isZoneSite(cfg) ? s.site : cfg.name;
+      // Rendered even at 0 — "no AI referrals this week" is the reading, and a
+      // chip that only appears once the number is positive hides it.
+      const ai = s.aiPageviews7d === undefined || s.aiPageviews7d === null
+        ? ""
+        : `<span class="chip" title="来自 AI 答案引擎（ChatGPT、Perplexity、Claude、Gemini、Copilot……）的页面浏览，7 天">AI 引荐 ${s.aiPageviews7d}</span>`;
       return (
         `<li><span class="proj" title="${esc(cfg && isZoneSite(cfg) ? cfg.name : s.site)}">${esc(label)}</span>` +
-        `<span class="src">${esc(s.site)}</span>` +
+        `<span class="src">${esc(s.site)}</span>${ai}` +
         `<span class="effect">${fmtNum(s.pageviews)} 次浏览 / ${fmtNum(s.visitors)} 次访问</span>${coverageNote(s.coverage)}</li>`
       );
     })
@@ -311,6 +340,7 @@ ${freshnessBar(o.sources)}
 </section>
 <div class="grid">${cards}</div>
 ${sitesSection(o.sites)}
+${siteSurfacesSection(o.siteSurfaces)}
 ${surfacesSection(o.surfaces)}
 ${workersSection(o.workers)}
 </main>`;
@@ -333,6 +363,39 @@ function renderReferrersTable(rows: ReferrerRow[]): string {
     .map(r => `<tr><td>${esc(r.referrer)}</td><td class="num">${r.count}</td><td class="num">${r.uniques}</td></tr>`)
     .join("");
   return `<div class="scroll"><table><tr><th>来源</th><th class="num">次数</th><th class="num">独立</th></tr>${trs}</table></div>`;
+}
+
+// 站点引荐 · the project's homepage host, by surface, with every AI arrival
+// listed per day. Per-day rather than a total because at these volumes each
+// row is a readable event ("3 from chatgpt.com on 10-27"), and because the
+// brief for this feature is literally "AI referrals by site, by day".
+function siteReferralsCard(r: ProjectSiteReferrals | null | undefined): string {
+  if (r === undefined) return "";
+  if (r === null) {
+    return `<div class="card"><h2>站点引荐</h2><p class="sub">该项目没有被 Web Analytics 跟踪的站点，没有站点侧引荐数据。</p></div>`;
+  }
+  const ai = r.surfaces.surfaces.find(s => s.id === "ai");
+  const rows = r.surfaces.surfaces
+    .map(s => `<li${s.views === 0 ? ' class="dim"' : ""}><span class="proj" title="${esc(s.note)}">${esc(s.name)}</span>` +
+      (s.hosts.length ? `<span class="src">${esc(s.hosts.slice(0, 4).join(" · "))}${s.hosts.length > 4 ? " …" : ""}</span>` : "") +
+      `<span class="effect">${s.views === 0 ? "—" : `${s.views} / ${s.uniques}`}</span></li>`)
+    .join("");
+  const aiTable = r.aiDaily.length
+    ? `<div class="scroll"><table><tr><th>日期</th><th>来源</th><th class="num">浏览</th><th class="num">访问</th></tr>` +
+      r.aiDaily.map(d => `<tr><td>${esc(d.date)}</td><td>${esc(d.referrer)}</td><td class="num">${d.pageviews}</td><td class="num">${d.visits}</td></tr>`).join("") +
+      `</table></div>`
+    : `<p class="sub">${r.since ? `自 ${esc(r.since)} 起` : "采集尚未运行，"}没有来自 AI 答案引擎的访问。</p>`;
+  const unknown = r.surfaces.unclassified.length
+    ? `<p class="sub">未归类：${r.surfaces.unclassified.slice(0, 8).map(u => `${esc(u.referrer)} ${u.views}`).join(" · ")}</p>`
+    : "";
+  return `<div class="card">
+<h2>站点引荐 · ${esc(r.host)}</h2>
+<p class="sub">Cloudflare Web Analytics 引荐来源，最近 ${r.windowDays} 个完整 UTC 日（浏览 / 访问）。</p>
+<ul class="plain">${rows}</ul>
+${unknown}
+<h3>AI 引荐 · 按天${ai && ai.views > 0 ? `（共 ${ai.views}）` : ""}</h3>
+${aiTable}
+</div>`;
 }
 
 // Shared by the project-detail post table (no 项目/发布 columns) and the
@@ -432,6 +495,7 @@ ${postsTable(d.posts, { showProject: false, showDate: false })}
 <p class="sub">referrers · 最新快照</p>
 ${renderReferrersTable(d.referrers)}
 </div>
+${siteReferralsCard(d.siteReferrals)}
 <div class="card">
 <h2>曝光体检</h2>
 <p class="sub">${d.audit.length} 项检查 · ${failCount} 项待修</p>

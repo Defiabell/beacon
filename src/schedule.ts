@@ -2,10 +2,15 @@ import type { SourceName } from "./collect/run";
 
 // Each minute retains its own invocation budget while sharing one trigger.
 // Keep the minute list in sync with wrangler.toml.
-export const COLLECT_CRON = "0,10,20,30,40 1 * * *";
-export const AUDIT_MINUTES: readonly number[] = [30, 40];
+export const COLLECT_CRON = "0,10,20,30,40,50 1 * * *";
+// Three audit shards since the well-known-files check (2026-11-01) pushed the
+// per-project cost to 12–13 subrequests: shard 0 is exactly 50, shard 2 has
+// room for two more projects before a fourth minute is needed.
+export const AUDIT_MINUTES: readonly number[] = [30, 40, 50];
 
-const LEGACY_COLLECT_CRON = "0,10,20 1 * * *";
+// Previous expressions, accepted at their original slots while a trigger
+// change propagates. The five-minute one carried audit shards 0/1 as well.
+const LEGACY_COLLECT_CRONS = new Set(["0,10,20 1 * * *", "0,10,20,30,40 1 * * *"]);
 const COLLECT_GROUPS: Record<number, SourceName[]> = {
   0: ["github"],
   10: ["posts"],
@@ -23,10 +28,11 @@ export function scheduledCollection(cron: string, scheduledTime: number): { sour
     // Accept the previous expressions during Cron Trigger propagation, but
     // only at their original UTC slots. Never route using actual start time.
     const auditShard = AUDIT_MINUTES.indexOf(minute);
-    if (auditShard >= 0 && (cron === COLLECT_CRON || cron === `${minute} 1 * * *`)) {
+    const legacyCoversMinute = LEGACY_COLLECT_CRONS.has(cron) && cron.split(" ")[0].split(",").includes(String(minute));
+    if (auditShard >= 0 && (cron === COLLECT_CRON || legacyCoversMinute || cron === `${minute} 1 * * *`)) {
       return { sources: ["audit"], auditShard };
     }
-    if (cron === COLLECT_CRON || cron === LEGACY_COLLECT_CRON) {
+    if (cron === COLLECT_CRON || legacyCoversMinute) {
       const sources = COLLECT_GROUPS[minute];
       if (sources) return { sources: [...sources], auditShard: 0 };
     }

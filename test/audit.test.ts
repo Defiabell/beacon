@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
 import { runRepoChecks, todoTitle, type RepoAuditInput } from "../src/audit/checks";
 import { AUDIT_MINUTES } from "../src/schedule";
-import { collectAuditInput, runAudit, auditWorstCaseSubrequests, SUBREQUEST_CAP, auditShards} from "../src/audit/run";
+import { collectAuditInput, collectWellKnown, sitemapUrlFor, wellKnownOrigin, runAudit, auditWorstCaseSubrequests, SUBREQUEST_CAP, auditShards} from "../src/audit/run";
 import * as db from "../src/db";
 import { CONFIG } from "../src/config";
 import repoMeta from "./fixtures/gh-repo.json";
@@ -26,7 +26,12 @@ function golden(): RepoAuditInput {
       "# shotsync\n\nA cross-device clipboard and image relay pool for quick sharing across devices.\n\n![screenshot](https://example.com/shot.png)\n",
     releaseAssetCount: 0,
     ogImageUrl: "https://shotsync.example.com/social-card.png",
-    brokenLinks: []
+    brokenLinks: [],
+    wellKnown: {
+      robots: { url: "https://shotsync.example.com/robots.txt", status: 200, contentType: "text/plain; charset=utf-8", hasSitemapLine: true, sitemapUrl: "https://shotsync.example.com/sitemap.xml" },
+      sitemap: { url: "https://shotsync.example.com/sitemap.xml", status: 200, contentType: "application/xml" },
+      llms: { url: "https://shotsync.example.com/llms.txt", status: 200, contentType: "text/plain" }
+    }
   };
 }
 
@@ -37,7 +42,7 @@ function byId(results: ReturnType<typeof runRepoChecks>) {
 describe("runRepoChecks", () => {
   it("passes every applicable check on a fully compliant input", () => {
     const results = runRepoChecks(golden());
-    expect(results).toHaveLength(9);
+    expect(results).toHaveLength(10);
     const checks = byId(results);
     expect(checks.description.status).toBe("pass");
     expect(checks.topics.status).toBe("pass");
@@ -48,6 +53,48 @@ describe("runRepoChecks", () => {
     expect(checks["readme-links"].status).toBe("pass");
     expect(checks["social-preview"].status).toBe("pass");
     expect(checks.homepage.status).toBe("pass");
+    expect(checks["well-known"].status).toBe("pass");
+  });
+
+  // The fake-200 class, live on this fleet 2026-11-01: shiling.defiabell.com
+  // served /llms.txt as 200 text/html (the SPA index), which every uptime
+  // check calls healthy and every crawler reads as "no such file".
+  it("well-known: fails a 200 whose content-type is text/html, naming the file", () => {
+    const input = golden();
+    input.wellKnown!.llms = { url: "https://shotsync.example.com/llms.txt", status: 200, contentType: "text/html; charset=utf-8" };
+    const result = byId(runRepoChecks(input))["well-known"];
+    expect(result.status).toBe("fail");
+    expect(result.priority).toBe(2);
+    expect(result.detail).toContain("llms.txt is text/html");
+  });
+
+  it("well-known: fails a missing file and a robots.txt without a Sitemap: line, listing every problem", () => {
+    const input = golden();
+    input.wellKnown!.sitemap = { url: "https://shotsync.example.com/sitemap.xml", status: 404, contentType: "text/html" };
+    input.wellKnown!.robots = { ...input.wellKnown!.robots, hasSitemapLine: false, sitemapUrl: null };
+    const result = byId(runRepoChecks(input))["well-known"];
+    expect(result.status).toBe("fail");
+    expect(result.detail).toContain("sitemap -> 404");
+    expect(result.detail).toContain("robots.txt has no Sitemap: line");
+  });
+
+  it("well-known: a transport failure is n/a, never a todo", () => {
+    // A Worker cannot fetch its own route (beacon.defiabell.com from beacon),
+    // and DNS/TLS can fail for a site that is fine. None of that is evidence
+    // about the file, and this audit has minted enough false P-todos already.
+    const input = golden();
+    input.wellKnown!.robots = { url: "https://shotsync.example.com/robots.txt", status: null, contentType: null, error: "Too many redirects" };
+    const result = byId(runRepoChecks(input))["well-known"];
+    expect(result.status).toBe("na");
+    expect(result.detail).toContain("unverifiable");
+    expect(result.detail).toContain("Too many redirects");
+  });
+
+  it("well-known: n/a when the project has no checkable homepage", () => {
+    const input = golden();
+    input.wellKnown = null;
+    expect(byId(runRepoChecks(input))["well-known"].status).toBe("na");
+    expect(todoTitle("well-known", input)).toBe("给 shotsync 站点补齐 robots.txt / sitemap / llms.txt（不能是 HTML 假 200）");
   });
 
   it("description: fails when empty or under 20 chars, priority 1", () => {
@@ -342,6 +389,7 @@ describe("collectAuditInput", () => {
       if (/releases\?per_page=10$/.test(url)) return Response.json([]);
       if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
       if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      if (/\/(robots\.txt|sitemap[^/]*|llms\.txt)$/.test(url)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
       probed.push(url);
       return new Response("", { status: 404 });
     };
@@ -771,6 +819,7 @@ describe("link checking: two more false-positive classes", () => {
       if (/releases\?per_page=10$/.test(url)) return Response.json([]);
       if (/^https:\/\/api\.github\.com\/repos\/[^/]+\/[^/]+$/.test(url)) return Response.json(repoMeta);
       if (/^https:\/\/github\.com\//.test(url)) return new Response("", { status: 200 });
+      if (/\/(robots\.txt|sitemap[^/]*|llms\.txt)$/.test(url)) return new Response("", { status: 200, headers: { "content-type": "text/plain" } });
       probed.push(url);
       return new Response("ok", { status: 200 });
     };
@@ -826,5 +875,91 @@ describe("link checking: two more false-positive classes", () => {
     // The non-workers.dev link on the same README is still checked — the skip
     // is host-scoped, not a blanket bail-out.
     expect(probed).toContain("https://example.com/guide");
+  });
+});
+
+// The well-known probe (robots.txt / sitemap / llms.txt on the homepage
+// origin). Budget first: it is three GETs per project, counted in
+// projectAuditCost, and that is what pushed the fleet to a third audit shard.
+describe("well-known files probe", () => {
+  const ORIGIN = "https://site.example.com";
+
+  function siteStub(files: Record<string, { status: number; type: string; body?: string }>, seen: string[] = []): typeof fetch {
+    return async (input, init) => {
+      const url = String(input);
+      seen.push(`${init?.method ?? "GET"} ${url}`);
+      const f = files[url.slice(ORIGIN.length)];
+      if (!f) return new Response("<html>index</html>", { status: 200, headers: { "content-type": "text/html; charset=utf-8" } });
+      return new Response(f.body ?? "", { status: f.status, headers: { "content-type": f.type } });
+    };
+  }
+
+  it("makes exactly three GETs: robots.txt, then the sitemap robots declares, and llms.txt", async () => {
+    const seen: string[] = [];
+    const probe = await collectWellKnown(ORIGIN, siteStub({
+      "/robots.txt": { status: 200, type: "text/plain", body: "User-agent: *\nAllow: /\n\nSitemap: https://site.example.com/sitemap-index.xml\n" },
+      "/sitemap-index.xml": { status: 200, type: "application/xml" },
+      "/llms.txt": { status: 200, type: "text/plain; charset=utf-8" }
+    }, seen));
+    expect(seen).toEqual([
+      `GET ${ORIGIN}/robots.txt`,
+      `GET ${ORIGIN}/sitemap-index.xml`,
+      `GET ${ORIGIN}/llms.txt`
+    ]);
+    expect(probe.robots.hasSitemapLine).toBe(true);
+    expect(probe.sitemap.url).toBe(`${ORIGIN}/sitemap-index.xml`);
+    expect(byId(runRepoChecks({ ...golden(), wellKnown: probe }))["well-known"].status).toBe("pass");
+  });
+
+  it("reports the SPA fallback as a fake 200 rather than a pass", async () => {
+    // Only robots.txt is real; the catch-all route answers everything else
+    // with the index page.
+    const probe = await collectWellKnown(ORIGIN, siteStub({
+      "/robots.txt": { status: 200, type: "text/plain", body: "User-agent: *\nSitemap: /sitemap.xml\n" }
+    }));
+    const result = byId(runRepoChecks({ ...golden(), wellKnown: probe }))["well-known"];
+    expect(result.status).toBe("fail");
+    expect(result.detail).toContain("sitemap is text/html");
+    expect(result.detail).toContain("llms.txt is text/html");
+  });
+
+  it("turns a thrown fetch into status null instead of propagating or failing the check", async () => {
+    const stub: typeof fetch = async input => {
+      if (String(input).endsWith("/llms.txt")) throw new TypeError("fetch failed");
+      return new Response("Sitemap: /s.xml", { status: 200, headers: { "content-type": "text/plain" } });
+    };
+    const probe = await collectWellKnown(ORIGIN, stub);
+    expect(probe.llms.status).toBeNull();
+    expect(probe.llms.error).toBe("fetch failed");
+    expect(byId(runRepoChecks({ ...golden(), wellKnown: probe }))["well-known"].status).toBe("na");
+  });
+
+  it("probes a declared sitemap on the homepage origin even when robots.txt names another host", () => {
+    // shotsync's robots.txt still points at its old *.workers.dev address,
+    // which a Worker cannot fetch; the check is about this site serving one.
+    expect(sitemapUrlFor(ORIGIN, "https://old.example.workers.dev/sitemap.xml")).toBe(`${ORIGIN}/sitemap.xml`);
+    expect(sitemapUrlFor(ORIGIN, "/sitemap-index.xml")).toBe(`${ORIGIN}/sitemap-index.xml`);
+    expect(sitemapUrlFor(ORIGIN, null)).toBe(`${ORIGIN}/sitemap.xml`);
+    // A relative value resolves against the origin; an unparsable one falls
+    // back to the default rather than throwing inside the audit.
+    expect(sitemapUrlFor(ORIGIN, "sitemaps/a.xml")).toBe(`${ORIGIN}/sitemaps/a.xml`);
+    expect(sitemapUrlFor(ORIGIN, "https://[::1")).toBe(`${ORIGIN}/sitemap.xml`);
+  });
+
+  it("has no origin to probe for a project without a homepage or on *.workers.dev", () => {
+    expect(wellKnownOrigin({ name: "x", repo: "a/b", tags: [] })).toBeNull();
+    expect(wellKnownOrigin({ name: "x", repo: "a/b", tags: [], homepage: "https://demo.defiabell.workers.dev" })).toBeNull();
+    // A sub-path homepage probes the origin: the files live at the root.
+    expect(wellKnownOrigin({ name: "x", repo: "a/b", tags: [], homepage: "https://defiabell.github.io/nightide/" })).toBe("https://defiabell.github.io");
+  });
+
+  it("collectAuditInput skips the probe entirely for a project with no checkable homepage", async () => {
+    const seen: string[] = [];
+    const base = buildStub();
+    const spy: typeof fetch = async (input, init) => { seen.push(String(input)); return base(input, init); };
+    const noHome = CONFIG.projects.find(p => !p.homepage)!;
+    const input = await collectAuditInput("tok", noHome, spy);
+    expect(input.wellKnown).toBeNull();
+    expect(seen.some(u => /robots\.txt|llms\.txt|sitemap/.test(u))).toBe(false);
   });
 });

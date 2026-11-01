@@ -20,6 +20,29 @@ export interface RepoAuditInput {
   releaseAssetCount: number;
   ogImageUrl: string | null;
   brokenLinks: string[];
+  // What the homepage's well-known files answered — see collectWellKnown in
+  // ./run.ts. null when the project has no checkable homepage (none
+  // configured, or a *.workers.dev address a Worker cannot reach).
+  wellKnown: WellKnownProbe | null;
+}
+
+// One well-known file's response, reduced to what the check needs. `status`
+// null means the fetch itself failed (DNS, TLS, the Worker-to-same-Worker
+// restriction) — not evidence about the file either way.
+export interface WellKnownFile {
+  url: string;
+  status: number | null;
+  contentType: string | null;
+  // robots.txt only: whether a `Sitemap:` line was present, and its value.
+  hasSitemapLine?: boolean;
+  sitemapUrl?: string | null;
+  error?: string;
+}
+
+export interface WellKnownProbe {
+  robots: WellKnownFile;
+  sitemap: WellKnownFile;
+  llms: WellKnownFile;
 }
 
 const MIN_DESCRIPTION_LENGTH = 20;
@@ -156,6 +179,56 @@ function checkHomepage(input: RepoAuditInput): CheckResult {
   };
 }
 
+// A SPA host with a catch-all route answers /robots.txt, /sitemap.xml and
+// /llms.txt with the index page: HTTP 200, Content-Type text/html. Every
+// crawler reads that as "this site has no robots.txt" while every uptime
+// check reads it as fine — a fake 200. Found live on this fleet 2026-11-01:
+// shiling.defiabell.com/llms.txt was 200 text/html, and four sites' /sitemap.xml
+// 404ed with an HTML body while robots.txt pointed at /sitemap-index.xml.
+function isHtml(contentType: string | null): boolean {
+  return (contentType ?? "").toLowerCase().includes("text/html");
+}
+
+function wellKnownFileProblem(name: string, f: WellKnownFile): string | null {
+  if (f.status === null) return null; // unverifiable — handled by the caller
+  if (f.status < 200 || f.status >= 300) return `${name} -> ${f.status}`;
+  if (isHtml(f.contentType)) return `${name} is text/html (SPA fallback, a fake 200)`;
+  return null;
+}
+
+function checkWellKnown(input: RepoAuditInput): CheckResult {
+  const probe = input.wellKnown;
+  if (!probe) {
+    return { checkId: "well-known", status: "na", priority: 2, detail: "no checkable homepage for this project" };
+  }
+  const files: [string, WellKnownFile][] = [["robots.txt", probe.robots], ["sitemap", probe.sitemap], ["llms.txt", probe.llms]];
+  // A transport failure on any file is not a verdict on the site. Failing
+  // here would mint a todo for a site that is fine, which this audit has done
+  // enough times already (see ./run.ts's link-check history).
+  const unreachable = files.filter(([, f]) => f.status === null);
+  if (unreachable.length > 0) {
+    return {
+      checkId: "well-known",
+      status: "na",
+      priority: 2,
+      detail: `unverifiable from a Worker: ${unreachable.map(([n, f]) => `${n} (${f.error ?? "fetch failed"})`).join(", ")}`
+    };
+  }
+  const problems = files.map(([n, f]) => wellKnownFileProblem(n, f)).filter((p): p is string => p !== null);
+  if (probe.robots.status !== null && probe.robots.status >= 200 && probe.robots.status < 300 && !isHtml(probe.robots.contentType) && !probe.robots.hasSitemapLine) {
+    problems.push("robots.txt has no Sitemap: line");
+  }
+  const pass = problems.length === 0;
+  return {
+    checkId: "well-known",
+    status: pass ? "pass" : "fail",
+    priority: 2,
+    detail: pass
+      ? `robots.txt, ${probe.sitemap.url.replace(/^https?:\/\/[^/]+/, "")} and llms.txt all answer non-HTML`
+      : problems.join("; ")
+  };
+}
+
 export function runRepoChecks(input: RepoAuditInput): CheckResult[] {
   return [
     checkDescription(input),
@@ -166,7 +239,8 @@ export function runRepoChecks(input: RepoAuditInput): CheckResult[] {
     checkReleaseAssets(input),
     checkReadmeLinks(input),
     checkSocialPreview(input),
-    checkHomepage(input)
+    checkHomepage(input),
+    checkWellKnown(input)
   ];
 }
 
@@ -207,6 +281,11 @@ export function todoTitle(checkId: string, input: RepoAuditInput): string {
       return `给 ${input.project} 设置 social preview 图`;
     case "homepage":
       return `给 ${input.project} 填 homepage 字段`;
+    // One title for every failure mode (missing file, HTML fake 200, robots
+    // without a Sitemap line) — same reasoning as "license": the title keys
+    // the todo's identity, the specifics live in CheckResult.detail.
+    case "well-known":
+      return `给 ${input.project} 站点补齐 robots.txt / sitemap / llms.txt（不能是 HTML 假 200）`;
     default:
       throw new Error(`unknown check id: ${checkId}`);
   }

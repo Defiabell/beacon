@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
 import { AUDIT_MINUTES, COLLECT_CRON, scheduledCollection } from "../src/schedule";
+import wranglerToml from "../wrangler.toml?raw";
 import { runDailyCollect } from "../src/collect/run";
 import { CONFIG } from "../src/config";
 import { insertPost, listSourceRuns } from "../src/db";
@@ -34,7 +35,17 @@ function budgetedFetch() {
 }
 
 describe("scheduled collection budgets", () => {
-  it("routes every daily group and both audit shards explicitly", () => {
+  it("src/schedule.ts and wrangler.toml agree on the cron, minute for minute", () => {
+    // The Worker routes on the minute it is invoked at; a minute present here
+    // but missing from wrangler.toml is a shard that silently never runs, and
+    // the reverse is an invocation that throws "Unknown collection schedule".
+    const crons = [...wranglerToml.matchAll(/crons\s*=\s*\[([^\]]*)\]/g)].flatMap(m => [...m[1].matchAll(/"([^"]+)"/g)].map(x => x[1]));
+    expect(crons).toEqual([COLLECT_CRON]);
+    const minutes = COLLECT_CRON.split(" ")[0].split(",").map(Number);
+    for (const m of AUDIT_MINUTES) expect(minutes).toContain(m);
+  });
+
+  it("routes every daily group and every audit shard explicitly", () => {
     expect([0, 10, 20].map(minute => scheduledCollection(COLLECT_CRON, +day + minute * 60000).sources))
       .toEqual([["github"], ["posts"], ["goatcounter", "cloudflare", "pages", "rum"]]);
     AUDIT_MINUTES.forEach((minute, auditShard) => {
@@ -47,6 +58,13 @@ describe("scheduled collection budgets", () => {
       expect(scheduledCollection("0,10,20 1 * * *", +day + minute * 60000))
         .toEqual(scheduledCollection(COLLECT_CRON, +day + minute * 60000));
     }
+    // The five-minute expression (two audit shards) is the one being replaced
+    // by the six-minute one; it keeps routing its own minutes and no others.
+    for (const minute of [0, 10, 20, 30, 40]) {
+      expect(scheduledCollection("0,10,20,30,40 1 * * *", +day + minute * 60000))
+        .toEqual(scheduledCollection(COLLECT_CRON, +day + minute * 60000));
+    }
+    expect(() => scheduledCollection("0,10,20,30,40 1 * * *", +day + 50 * 60000)).toThrow("Unknown collection schedule");
     for (const minute of AUDIT_MINUTES) {
       expect(scheduledCollection(`${minute} 1 * * *`, +day + minute * 60000))
         .toEqual(scheduledCollection(COLLECT_CRON, +day + minute * 60000));
@@ -90,7 +108,9 @@ describe("scheduled collection budgets", () => {
       expect(reports.every(report => report.ok)).toBe(true);
       counts.push(budget.requests());
     }
-    expect(counts).toEqual([CONFIG.projects.length * 4, 12, 4]);
+    // Analytics: goatcounter is unconfigured (0), cloudflare 1, pages 2, rum 2
+    // (daily totals + referrers).
+    expect(counts).toEqual([CONFIG.projects.length * 4, 12, 5]);
     expect(counts.every(count => count <= 40)).toBe(true);
     const health = await listSourceRuns(env.DB);
     expect(health.find(row => row.source === "rum")?.ok).toBe(true);

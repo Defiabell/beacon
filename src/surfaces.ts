@@ -38,6 +38,11 @@ export const SURFACES: Surface[] = [
       "claude.ai",
       "gemini.google.com",
       "copilot.microsoft.com",
+      "grok.com",
+      "duck.ai",
+      "meta.ai",
+      "chat.deepseek.com",
+      "chat.mistral.ai",
       "phind.com",
       "you.com",
       "felo.ai",
@@ -47,14 +52,19 @@ export const SURFACES: Surface[] = [
       "moonshot.cn",
       "doubao.com",
       "yuanbao.tencent.com",
-      "tongyi.com"
+      "tongyi.com",
+      // Path labels (see referrerLabel below): AI products that live under a
+      // path of a general-purpose site. The bare host stays on "search".
+      "bing.com/copilotsearch",
+      "x.com/i/grok",
+      "kagi.com/assistant"
     ]
   },
   {
     id: "search",
     name: "搜索引擎",
     note: "传统自然搜索。和上面一格一起看，才知道发现方式正在往哪边挪。",
-    hosts: ["Google", "google.com", "Bing", "bing.com", "DuckDuckGo", "duckduckgo.com", "baidu.com", "sogou.com", "yandex.com", "ecosia.org"]
+    hosts: ["Google", "google.com", "Bing", "bing.com", "DuckDuckGo", "duckduckgo.com", "kagi.com", "baidu.com", "sogou.com", "yandex.com", "ecosia.org"]
   },
   {
     id: "curation",
@@ -100,6 +110,42 @@ export const SURFACES: Surface[] = [
     hosts: ["defiabell.com", "defiabell.github.io", "defiabell.pages.dev", "shiling.pages.dev", "workers.dev"]
   }
 ];
+
+// AI products that share a host with an ordinary search engine and are only
+// told apart by the referrer's path. referrerLabel folds a matching (host,
+// path) into one of these labels so that classifyReferrer (which only ever
+// sees a string) can place it on the "ai" surface while the bare host stays
+// on "search". Prefix match on the path, exact-or-subdomain match on the host.
+//
+// What this deliberately cannot cover — a query string is never part of a
+// referrer, and Cloudflare RUM has no dimension for it:
+//   - Google AI Mode (`google.com/search?udm=50`): the only marker is the
+//     `udm=50` query parameter, and google.com also sends an origin-only
+//     referrer, so these arrivals are indistinguishable from plain search.
+//   - DuckDuckGo AI chat on the main host (`duckduckgo.com/?ia=chat`): same
+//     shape; only the dedicated duck.ai host is recognisable.
+// Both stay counted under "search". Measured 2026-11-01: RUM does deliver
+// refererPath for hosts that send one (www.v2ex.com /t/1252234, github.com
+// /ruanyf/weekly/issues/12817), so the path rules below are not theoretical.
+const AI_PATH_LABELS: { host: string; prefix: string; label: string }[] = [
+  { host: "bing.com", prefix: "/copilotsearch", label: "bing.com/copilotsearch" },
+  { host: "x.com", prefix: "/i/grok", label: "x.com/i/grok" },
+  { host: "kagi.com", prefix: "/assistant", label: "kagi.com/assistant" }
+];
+
+// The string a site-level referrer is stored and classified as: the lower-cased
+// host, or one of the AI_PATH_LABELS when the path says the arrival came from
+// that host's AI product rather than its search box. Everything that isn't a
+// path-rule host ignores the path entirely, so cardinality stays at one row
+// per referring host per day.
+export function referrerLabel(host: string, path: string | null | undefined): string {
+  const h = host.toLowerCase();
+  const p = (path ?? "").toLowerCase();
+  for (const rule of AI_PATH_LABELS) {
+    if (matches(h, rule.host) && p.startsWith(rule.prefix)) return rule.label;
+  }
+  return h;
+}
 
 // Exact match or subdomain suffix, case-insensitive. `workers.dev` on the "own"
 // surface intentionally matches every *.workers.dev subdomain — beacon itself,
