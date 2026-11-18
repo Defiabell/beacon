@@ -16,7 +16,7 @@ beacon is a single **Cloudflare Worker + D1 database**, organized around three l
 
 **Where traffic comes from, including AI answer engines (GEO).** Two classifiers share one surface list (`src/surfaces.ts`): GitHub's repo referrers and Cloudflare Web Analytics' `refererHost` for the sites. Both bucket referrers into AI answer engines (chatgpt.com, perplexity.ai, claude.ai, gemini.google.com, copilot.microsoft.com, grok.com, duck.ai, …; plus `bing.com/copilotsearch`, `x.com/i/grok` and `kagi.com/assistant` by referrer path), search, curation, community, RSS, code hosts and your own sites, and list anything unrecognised by name. The overview shows an "AI 引荐" count per site (7 days) and a site-wide breakdown (30 days); each project page lists every AI arrival to its homepage host per day. Known blind spots, by construction: a referrer never carries a query string, so Google AI Mode (`udm=50`) and DuckDuckGo's `?ia=chat` are indistinguishable from plain search and stay counted there; and a JS beacon only sees people who click through — AI crawlers that fetch pages without a browser are invisible here.
 
-Everything is served by one Worker: a public SSR dashboard (`/`, `/p/:project`, `/matrix`, `/todos`, `/posts`) that anyone can read, plus the same `ADMIN_TOKEN`-gated write path exposed two ways — a JSON admin API for curl/scripts (`/api/admin/*`) and, once you log in at `/login` in a browser, real controls on the dashboard pages themselves (checkboxes, per-cell status pickers, a post-registration form — see "Browser login" below). Every GET response outside `/api/admin/*`, `/ui/*`, and `/login` also goes through the Workers Cache API — on a custom domain (not a bare `workers.dev` subdomain) this gives true edge caching in addition to the `max-age=60` browser cache; a logged-in request always skips that cache and gets a fresh, private render instead.
+Everything is served by one Worker: a public SSR dashboard (`/`, `/trends`, `/p/:project`, `/matrix`, `/todos`, `/posts`, `/impact`) that anyone can read, plus the same `ADMIN_TOKEN`-gated write path exposed two ways — a JSON admin API for curl/scripts (`/api/admin/*`) and, once you log in at `/login` in a browser, real controls on the dashboard pages themselves (checkboxes, per-cell status pickers, a post-registration form — see "Browser login" below). Every GET response outside `/api/admin/*`, `/ui/*`, and `/login` also goes through the Workers Cache API — on a custom domain (not a bare `workers.dev` subdomain) this gives true edge caching in addition to the `max-age=60` browser cache; a logged-in request always skips that cache and gets a fresh, private render instead.
 
 ## Deploy your own (~5 min)
 
@@ -174,8 +174,9 @@ curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
 
 No token needed — these are public:
 
-- `GET /` `/p/:project` `/matrix` `/todos` `/posts` — the HTML dashboard
-- `GET /api/overview` `/api/matrix` `/api/posts` `/api/health` `/api/todos?status=open|done` `/api/project/:name` — the same data as JSON
+- `GET /` `/p/:project` `/matrix` `/todos` `/posts` `/impact` — the HTML dashboard
+- `GET /trends?days=7|30|90` — every stored metric day by day: site pageviews and visits, repo views and clones, stars, Worker requests. Per-day column charts with a hover readout (CSS only, still no JavaScript), a small chart per site / repo / script, and the same numbers as a table. A day with no recorded row is drawn as a gap, never as zero
+- `GET /api/overview` `/api/trends?days=` `/api/matrix` `/api/posts` `/api/impact` `/api/health` `/api/todos?status=open|done` `/api/project/:name` — the same data as JSON
 
 ## Development
 

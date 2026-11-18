@@ -14,7 +14,7 @@ beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织
 - **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 10 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步，以及首页是 HTML 页面的项目（纯 API Worker 的根路径判 n/a）`/robots.txt`、robots 里声明的 sitemap 和 `/llms.txt` 是否是真文件——返回 2xx 但 content-type 是 `text/html`，就是 SPA 兜底路由把首页当成了这些文件，爬虫一律读作「没有这个文件」的假 200），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 
-整个系统跑在一个 Worker 里：一个谁都能看的公开 SSR dashboard（`/`、`/p/:project`、`/matrix`、`/todos`、`/posts`），加同一套用 `ADMIN_TOKEN` 保护的写入路径的两种入口——给 curl/脚本用的 JSON admin API（`/api/admin/*`），以及在浏览器 `/login` 登录后，dashboard 页面本身出现的真实控件（复选框、每格状态选择器、登记帖子表单——见下方"浏览器登录"一节）。除 `/api/admin/*`、`/ui/*`、`/login` 外，所有 GET 响应都会经过 Workers Cache API——在自定义域名下（非裸 `workers.dev` 子域）会带来真正的边缘缓存，叠加在 `max-age=60` 的浏览器缓存之上；已登录的请求永远跳过这个缓存，拿到的是现算的私有渲染。
+整个系统跑在一个 Worker 里：一个谁都能看的公开 SSR dashboard（`/`、`/trends`、`/p/:project`、`/matrix`、`/todos`、`/posts`、`/impact`），加同一套用 `ADMIN_TOKEN` 保护的写入路径的两种入口——给 curl/脚本用的 JSON admin API（`/api/admin/*`），以及在浏览器 `/login` 登录后，dashboard 页面本身出现的真实控件（复选框、每格状态选择器、登记帖子表单——见下方"浏览器登录"一节）。除 `/api/admin/*`、`/ui/*`、`/login` 外，所有 GET 响应都会经过 Workers Cache API——在自定义域名下（非裸 `workers.dev` 子域）会带来真正的边缘缓存，叠加在 `max-age=60` 的浏览器缓存之上；已登录的请求永远跳过这个缓存，拿到的是现算的私有渲染。
 
 ## 自己部署（约 5 分钟）
 
@@ -169,8 +169,9 @@ curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
 
 以下接口不需要 token，都是公开的：
 
-- `GET /` `/p/:project` `/matrix` `/todos` `/posts` —— HTML dashboard
-- `GET /api/overview` `/api/matrix` `/api/posts` `/api/health` `/api/todos?status=open|done` `/api/project/:name` —— 同样的数据，JSON 格式
+- `GET /` `/p/:project` `/matrix` `/todos` `/posts` `/impact` —— HTML dashboard
+- `GET /trends?days=7|30|90` —— 所有已存指标的逐日视图：站点浏览与访问、仓库 views 与 clone、star、Worker 请求数。每天一根柱，悬停看当天数字（纯 CSS，仍然没有 JavaScript），每个站点／仓库／脚本各有一张小图，页面底部是同一份数据的表格。当天没有记录画成空档，不画成 0
+- `GET /api/overview` `/api/trends?days=` `/api/matrix` `/api/posts` `/api/impact` `/api/health` `/api/todos?status=open|done` `/api/project/:name` —— 同样的数据，JSON 格式
 
 ## 开发
 

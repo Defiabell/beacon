@@ -6,7 +6,8 @@ import { handleUi } from "./api/ui";
 import { handleSession } from "./api/session";
 import { handlePublicApi, buildOverview, buildProjectDetail, buildMatrix, buildPostsWithMetrics, buildImpact } from "./api/public";
 import { listTodos } from "./db";
-import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderImpact } from "./ui/pages";
+import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderImpact, renderTrends } from "./ui/pages";
+import { buildTrends, parseTrendWindow } from "./api/trends";
 import { isAuthed, hasAdminCredential } from "./auth";
 
 const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
@@ -70,6 +71,11 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
     const detail = await buildProjectDetail(env, name);
     if (!detail) return notFound();
     return htmlOk(renderProject(name, detail, authed), cacheControl);
+  }
+
+  if (path === "/trends") {
+    const days = parseTrendWindow(new URL(req.url).searchParams.get("days"));
+    return htmlOk(renderTrends(await buildTrends(env, days), authed), cacheControl);
   }
 
   if (path === "/matrix") return htmlOk(renderMatrix(await buildMatrix(env), authed), cacheControl);

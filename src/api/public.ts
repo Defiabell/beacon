@@ -19,7 +19,12 @@ import {
   getRepoSeries,
   getAllRepoDaily,
   getLatestReferrers,
-  getPeakReferrers,
+  getAllLatestReferrers,
+  getAllPeakReferrers,
+  getRepoDailyRange,
+  getSiteDailyRange,
+  getWorkerDailyRange,
+  getStarHistoryFrom,
   getWorkerTotals,
   getSiteTotals,
   getSiteReferrerTotals,
@@ -49,8 +54,15 @@ import {
   type ImpactStatus,
   type TodoEventInput
 } from "../impact/attribute";
+import { buildTrends, parseTrendWindow, windowDates, type DaySeries } from "./trends";
 
 const REPO_SERIES_SUMMARY_DAYS = 14;
+// How many days of daily values ride along with the overview's totals, for the
+// sparklines beside them: the current 7-day window plus the 7 days before it,
+// which is also exactly what the tiles' "vs previous 7 days" needs.
+// Tied to the repo summary window because the fleet's daily repo views are
+// summed straight from each project's viewsSeries.
+const OVERVIEW_TREND_DAYS = REPO_SERIES_SUMMARY_DAYS;
 const REPO_SERIES_DETAIL_DAYS = 90;
 const SITE_PV_WINDOW_DAYS = 7;
 // Site-side referrer window. Longer than the pageview window on purpose: an AI
@@ -81,6 +93,10 @@ export interface ProjectSummary {
   machineClones14d: number | null;
   postCount: number;
   topReferrers: ReferrerRow[];
+  // Daily views over the same 14 complete UTC days as views14d, one slot per
+  // day and null where GitHub reported nothing — the card's sparkline.
+  // Optional so ProjectSummary literals written before it keep typechecking.
+  viewsSeries?: DaySeries;
 }
 
 // Trailing-window request counts for this account's Workers.
@@ -96,13 +112,29 @@ export interface WorkerTotal {
   days: number;
   lastDate?: string | null;
   coverage?: MetricCoverage;
+  /** Daily requests over the last OVERVIEW_TREND_DAYS complete UTC days. */
+  series?: DaySeries;
 }
 
 // A site row on the overview: the 7-day totals plus how many of those
 // pageloads arrived from an AI answer engine (src/surfaces.ts "ai"). null until
 // the referrer collector has run at least once — before that, 0 would be a
 // claim about traffic nobody was watching.
-export type SiteRow = SiteTotal & { coverage?: MetricCoverage; aiPageviews7d?: number | null };
+export type SiteRow = SiteTotal & { coverage?: MetricCoverage; aiPageviews7d?: number | null; series?: DaySeries };
+
+// Fleet-wide daily values behind the overview's headline tiles. Each series
+// has one slot per day in `dates` (the last OVERVIEW_TREND_DAYS complete UTC
+// days) and is null on a day nothing was recorded, so the tile can refuse to
+// print a week-over-week change computed from an incomplete week.
+export interface OverviewTrend {
+  dates: string[];
+  sitePageviews: DaySeries;
+  siteVisits: DaySeries;
+  repoViews: DaySeries;
+  workerRequests: DaySeries;
+  stars: number | null;
+  starsDelta7d: number | null;
+}
 
 export interface Overview {
   projects: ProjectSummary[];
@@ -118,6 +150,8 @@ export interface Overview {
   // Overview literals written before this field keep typechecking; always
   // populated by buildOverview.
   siteSurfaces?: SurfaceBreakdown;
+  // Optional for the same reason. Always populated by buildOverview.
+  trend?: OverviewTrend;
 }
 
 export interface PostWithMetrics {
@@ -199,6 +233,11 @@ export interface ProjectDetail {
   audit: (CheckResult & { checkedAt: string })[];
   // Optional for the same reason `events` is. Always set by buildProjectDetail.
   siteReferrals?: ProjectSiteReferrals | null;
+  // The calendar the page's charts are drawn on: the last 90 complete UTC
+  // days, so a day with no row shows as a gap instead of silently closing up.
+  // Optional like the two above; without it the charts fall back to the dates
+  // that happen to be recorded.
+  chartDates?: string[];
   // Optional (rather than required) so existing ProjectDetail literals built
   // before this feature — tests, mainly — keep typechecking without every one
   // of them needing an `events: []`. Always populated (possibly []) by
@@ -328,18 +367,54 @@ function computeProjectSummary(
     clones14d: repoSeries.length ? humanClones : null,
     machineClones14d: repoSeries.length ? machineClones : null,
     postCount,
-    topReferrers: referrers.slice(0, TOP_REFERRERS_LIMIT)
+    topReferrers: referrers.slice(0, TOP_REFERRERS_LIMIT),
+    viewsSeries: calendarSeries(repoSeries, windowDates(today, REPO_SERIES_SUMMARY_DAYS), r => r.views)
   };
 }
 
-async function fetchProjectSummary(db: D1Database, project: ProjectConfig, allPosts: Post[], today: string, sources: SourceRun[]): Promise<ProjectSummary> {
-  const [starSeries, repoSeries, referrers] = await Promise.all([
-    getStarSeries(db, project.repo),
-    getRepoSeries(db, project.repo, REPO_SERIES_SUMMARY_DAYS, today),
-    getLatestReferrers(db, project.repo)
+// Rows laid out on a calendar: the sum of `pick` over the rows that exist for
+// each date, null where there are none.
+function calendarSeries<T extends { date: string }>(rows: T[], dates: string[], pick: (row: T) => number): DaySeries {
+  const byDate = new Map<string, number>();
+  for (const r of rows) byDate.set(r.date, (byDate.get(r.date) ?? 0) + pick(r));
+  return dates.map(d => byDate.get(d) ?? null);
+}
+
+function groupRows<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const r of rows) {
+    const k = key(r);
+    const list = out.get(k);
+    if (list) list.push(r);
+    else out.set(k, [r]);
+  }
+  return out;
+}
+
+// Every project's summary from three fleet-wide queries instead of three per
+// project. With ten projects the per-project form alone was 30 of the 50 D1
+// queries a free-plan invocation is allowed, and the overview as a whole sat at
+// 49 — one more project and the page would have started failing.
+async function fetchProjectSummaries(db: D1Database, allPosts: Post[], today: string, sources: SourceRun[]): Promise<ProjectSummary[]> {
+  const [starRows, repoRows, referrerRows] = await Promise.all([
+    getStarHistoryFrom(db, ""),
+    getRepoDailyRange(db, shiftDate(today, -REPO_SERIES_SUMMARY_DAYS), today),
+    getAllLatestReferrers(db)
   ]);
-  const postCount = allPosts.filter(p => p.project === project.name).length;
-  return computeProjectSummary(project, starSeries, repoSeries, referrers, postCount, today, sources.find(s => s.source === `github:${project.repo}`));
+  const starsByRepo = groupRows(starRows, r => r.repo);
+  const repoByRepo = groupRows(repoRows, r => r.repo);
+  const referrersByRepo = groupRows(referrerRows, r => r.repo);
+  return CONFIG.projects.map(project =>
+    computeProjectSummary(
+      project,
+      (starsByRepo.get(project.repo) ?? []).map(r => ({ date: r.date, stars: r.stars })),
+      repoByRepo.get(project.repo) ?? [],
+      (referrersByRepo.get(project.repo) ?? []).map(r => ({ referrer: r.referrer, count: r.count, uniques: r.uniques })),
+      allPosts.filter(p => p.project === project.name).length,
+      today,
+      sources.find(s => s.source === `github:${project.repo}`)
+    )
+  );
 }
 
 // listProjectChannels also carries postId, which the public coverage/matrix
@@ -387,10 +462,15 @@ async function fetchImpactDataByProject(db: D1Database): Promise<Map<string, Pro
 // once per request and shared, because buildMatrix needs the same map for its
 // coverage cells that buildImpact needs for its attribution verdicts.
 async function fetchPeaksByProject(db: D1Database): Promise<Map<string, PeakReferrer[]>> {
-  const entries = await Promise.all(
-    CONFIG.projects.map(async (p): Promise<readonly [string, PeakReferrer[]]> => [p.name, await getPeakReferrers(db, p.repo)] as const)
+  // One query for the whole fleet (it used to be one per project). Every
+  // configured project gets an entry, an empty one if it has no snapshots.
+  const byRepo = groupRows(await getAllPeakReferrers(db), r => r.repo);
+  return new Map(
+    CONFIG.projects.map(p => [
+      p.name,
+      (byRepo.get(p.repo) ?? []).map(({ referrer, views, uniques, firstSeen, lastSeen }) => ({ referrer, views, uniques, firstSeen, lastSeen }))
+    ])
   );
-  return new Map(entries);
 }
 
 // Which channel a post event was published on. The explicit link that the
@@ -487,15 +567,26 @@ export async function buildOverview(env: Env): Promise<Overview> {
     listSourceRuns(db),
     getTopOpenTodos(db, TOP_TODOS_LIMIT)
   ]);
-  const projects = await Promise.all(CONFIG.projects.map(p => fetchProjectSummary(db, p, allPosts, today, sources)));
+  const projects = await fetchProjectSummaries(db, allPosts, today, sources);
 
   // Peaks are read before the suggestions, not after: the ranking now needs
   // them (proven referral outranks tag fit — see suggestPairs).
   const peaksByProject = await fetchPeaksByProject(db);
   const suggestions = suggestPairs(CONFIG.projects, toCoverage(coverageRows), provenViewsByChannel(peaksByProject));
 
+  // Daily values for the sparklines and the tiles' week-over-week change.
+  const trendDates = windowDates(today, OVERVIEW_TREND_DAYS);
+  const [siteDaily, workerDaily] = await Promise.all([
+    getSiteDailyRange(db, trendDates[0], today),
+    getWorkerDailyRange(db, trendDates[0], today)
+  ]);
+  const siteDailyBySite = groupRows(siteDaily, r => r.site);
+  const workerDailyByScript = groupRows(workerDaily, r => r.script);
+
   const workerRows = await getWorkerTotals(db, WORKER_WINDOW_DAYS, today);
-  const workers = workerRows.map(w => ({ ...w, coverage: metricCoverage(WORKER_WINDOW_DAYS, w.days, w.lastDate, today,
+  const workers = workerRows.map(w => ({ ...w,
+    series: calendarSeries(workerDailyByScript.get(w.script) ?? [], trendDates, r => r.requests),
+    coverage: metricCoverage(WORKER_WINDOW_DAYS, w.days, w.lastDate, today,
     sources.find(s => s.source === (w.script.endsWith('.pages.dev') || w.script.startsWith('pages-worker--') ? 'pages' : 'cloudflare'))) }));
   const siteRows = await getSiteTotals(db, SITE_PV_WINDOW_DAYS, today);
   for (const host of CONFIG.sites.flatMap(siteHosts)) {
@@ -506,7 +597,9 @@ export async function buildOverview(env: Env): Promise<Overview> {
     getSiteReferrerTotals(db, SITE_PV_WINDOW_DAYS, today),
     getSiteReferrerTotals(db, SITE_REFERRER_WINDOW_DAYS, today)
   ]);
-  const sites: SiteRow[] = siteRows.map(s => ({ ...s, coverage: metricCoverage(SITE_PV_WINDOW_DAYS, s.days, s.lastDate, today,
+  const sites: SiteRow[] = siteRows.map(s => ({ ...s,
+    series: calendarSeries(siteDailyBySite.get(s.site) ?? [], trendDates, r => r.pageviews),
+    coverage: metricCoverage(SITE_PV_WINDOW_DAYS, s.days, s.lastDate, today,
     sources.find(r => r.source === (siteFor(CONFIG.sites, s.site) ? 'rum' : 'goatcounter'))),
     aiPageviews7d: referrerSince === null ? null : referrers7d
       .filter(r => r.site === s.site && classifyReferrer(r.referrer) === "ai")
@@ -522,8 +615,22 @@ export async function buildOverview(env: Env): Promise<Overview> {
     surfaces: buildSurfaceBreakdown(peaksByProject),
     workers,
     sites,
-    siteSurfaces: buildSiteSurfaceBreakdown(referrers30d, referrerSince)
+    siteSurfaces: buildSiteSurfaceBreakdown(referrers30d, referrerSince),
+    trend: {
+      dates: trendDates,
+      sitePageviews: calendarSeries(siteDaily, trendDates, r => r.pageviews),
+      siteVisits: calendarSeries(siteDaily, trendDates, r => r.visitors),
+      repoViews: trendDates.map((_, i) => sumKnown(projects.map(p => p.viewsSeries?.[i] ?? null))),
+      workerRequests: calendarSeries(workerDaily, trendDates, r => r.requests),
+      stars: sumKnown(projects.map(p => p.stars)),
+      starsDelta7d: sumKnown(projects.map(p => p.starsDelta7d))
+    }
   };
+}
+
+function sumKnown(values: (number | null)[]): number | null {
+  const known = values.filter((v): v is number => v !== null);
+  return known.length ? known.reduce((a, b) => a + b, 0) : null;
 }
 
 // Returns null when `name` doesn't match a configured project (caller maps
@@ -558,7 +665,7 @@ export async function buildProjectDetail(env: Env, name: string): Promise<Projec
   const projectEvents = events.map(e => computeImpact(e, repoDailyAll, starSeries));
   const siteReferrals = await buildProjectSiteReferrals(db, project, today);
 
-  return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents, siteReferrals };
+  return { summary, repoSeries, starSeries, referrers, posts, audit, events: projectEvents, siteReferrals, chartDates: windowDates(today, REPO_SERIES_DETAIL_DAYS) };
 }
 
 // The homepage's hostname, when it is one of the sites RUM tracks. A project
@@ -822,6 +929,7 @@ export async function handlePublicApi(req: Request, env: Env, path: string): Pro
   if (path === "/api/matrix") return jsonOk(await buildMatrix(env));
   if (path === "/api/posts") return jsonOk(await buildPostsWithMetrics(env));
   if (path === "/api/impact") return jsonOk(await buildImpact(env));
+  if (path === "/api/trends") return jsonOk(await buildTrends(env, parseTrendWindow(new URL(req.url).searchParams.get("days"))));
   if (path === "/api/health") return jsonOk(await listSourceRuns(env.DB));
 
   if (path === "/api/todos") {

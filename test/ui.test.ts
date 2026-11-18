@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { esc, svgSparkline, page } from "../src/ui/layout";
+import { esc, page } from "../src/ui/layout";
 import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderLogin, renderImpact } from "../src/ui/pages";
 import type { Overview, ProjectDetail, MatrixData, MatrixCoverageRow, PostWithMetrics, ProjectSummary, SurfaceBreakdown } from "../src/api/public";
 import type { Todo } from "../src/types";
@@ -23,54 +23,6 @@ describe("esc", () => {
 
   it("passes plain text through unchanged", () => {
     expect(esc("nightide 夜潮")).toBe("nightide 夜潮");
-  });
-});
-
-describe("svgSparkline", () => {
-  it("returns an empty string for an empty series", () => {
-    expect(svgSparkline([])).toBe("");
-  });
-
-  it("renders an <svg> with one point per input value", () => {
-    const svg = svgSparkline([1, 5, 3, 9, 2]);
-    expect(svg).toContain("<svg");
-    const match = svg.match(/points="([^"]+)"/);
-    expect(match).not.toBeNull();
-    expect(match![1].trim().split(/\s+/)).toHaveLength(5);
-  });
-
-  it("renders a single point (not a visible line) for a one-value series, without dividing by zero", () => {
-    const svg = svgSparkline([7]);
-    expect(svg).toContain("<svg");
-    const match = svg.match(/points="([^"]+)"/);
-    expect(match![1].trim().split(/\s+/)).toHaveLength(1);
-    expect(svg).not.toContain("NaN");
-  });
-
-  it("renders a flat line (not NaN) when every value is equal", () => {
-    const svg = svgSparkline([4, 4, 4]);
-    expect(svg).not.toContain("NaN");
-    const match = svg.match(/points="([^"]+)"/);
-    expect(match![1].trim().split(/\s+/)).toHaveLength(3);
-  });
-
-  it("with no markers argument, renders exactly as before this feature (no marker lines)", () => {
-    const svg = svgSparkline([1, 2, 3]);
-    expect(svg).not.toContain('class="marker"');
-  });
-
-  it("draws one vertical marker line per in-range marker, carrying its escaped label as a <title> tooltip", () => {
-    const svg = svgSparkline([1, 2, 3, 4, 5], 100, 40, [{ index: 2, label: "<b>发帖</b>" }]);
-    expect(svg).toContain('class="marker"');
-    expect(svg).not.toContain("<b>发帖</b>");
-    expect(svg).toContain("&lt;b&gt;发帖&lt;/b&gt;");
-    // exactly one marker line for the one in-range marker given
-    expect((svg.match(/class="marker"/g) ?? []).length).toBe(1);
-  });
-
-  it("silently drops a marker whose index falls outside the series (event date not present in this particular series)", () => {
-    const svg = svgSparkline([1, 2, 3], 100, 40, [{ index: 99, label: "out of range" }, { index: -1, label: "also out of range" }]);
-    expect(svg).not.toContain('class="marker"');
   });
 });
 

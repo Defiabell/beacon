@@ -547,3 +547,73 @@ export async function getStarSeries(db: D1Database, repo: string): Promise<{ dat
     .all<{ date: string; stars: number }>();
   return res.results;
 }
+
+// ---- fleet-wide range reads -------------------------------------------------
+//
+// One query for every repo / site / script at once, grouped in the caller. The
+// per-entity readers above cost one D1 query each, and a Worker invocation has
+// a hard query budget (50 on the free plan): the overview was spending 40 of
+// them asking the same three questions once per project. `from` is inclusive,
+// `to` is exclusive, both YYYY-MM-DD — callers pass `to = today` to keep
+// today's partial counts out, the same rule getRepoSeries applies.
+
+export async function getRepoDailyRange(db: D1Database, from: string, to: string): Promise<RepoDaily[]> {
+  const res = await db.prepare(
+    `SELECT repo, date, views, unique_views AS uniqueViews, clones, unique_clones AS uniqueClones, stars, forks
+     FROM repo_daily WHERE date >= ?1 AND date < ?2 ORDER BY repo ASC, date ASC`
+  ).bind(from, to).all<RepoDaily>();
+  return res.results;
+}
+
+export async function getSiteDailyRange(db: D1Database, from: string, to: string): Promise<SiteDaily[]> {
+  const res = await db.prepare(
+    `SELECT site, date, pageviews, visitors FROM site_daily
+     WHERE date >= ?1 AND date < ?2 ORDER BY site ASC, date ASC`
+  ).bind(from, to).all<SiteDaily>();
+  return res.results;
+}
+
+export interface WorkerDailyRow { script: string; date: string; requests: number; errors: number; }
+
+export async function getWorkerDailyRange(db: D1Database, from: string, to: string): Promise<WorkerDailyRow[]> {
+  const res = await db.prepare(
+    `SELECT script, date, requests, errors FROM worker_daily
+     WHERE date >= ?1 AND date < ?2 ORDER BY script ASC, date ASC`
+  ).bind(from, to).all<WorkerDailyRow>();
+  return res.results;
+}
+
+export interface StarHistoryRow { repo: string; date: string; stars: number; }
+
+// Every star snapshot from `from` on (pass "" for the whole history). Unlike
+// the traffic tables this one includes today: a star count is a state, not a
+// partial daily total, so today's snapshot is as good as any other.
+export async function getStarHistoryFrom(db: D1Database, from: string): Promise<StarHistoryRow[]> {
+  const res = await db.prepare(
+    `SELECT repo, date, stars FROM star_history WHERE date >= ?1 ORDER BY repo ASC, date ASC`
+  ).bind(from).all<StarHistoryRow>();
+  return res.results;
+}
+
+// getLatestReferrers for every repo at once: each repo's own most recent
+// snapshot (their capture dates can differ when one repo's collection failed).
+export async function getAllLatestReferrers(db: D1Database): Promise<(ReferrerRow & { repo: string })[]> {
+  const res = await db.prepare(
+    `SELECT r.repo, r.referrer, r.count, r.uniques FROM referrer_snapshot r
+     JOIN (SELECT repo, MAX(captured_date) AS d FROM referrer_snapshot GROUP BY repo) latest
+       ON latest.repo = r.repo AND latest.d = r.captured_date
+     ORDER BY r.repo ASC, r.count DESC`
+  ).all<ReferrerRow & { repo: string }>();
+  return res.results;
+}
+
+// getPeakReferrers for every repo at once — same MAX-per-referrer reading, see
+// the comment on that function for why MAX is the right aggregate.
+export async function getAllPeakReferrers(db: D1Database): Promise<(PeakReferrer & { repo: string })[]> {
+  const res = await db.prepare(
+    `SELECT repo, referrer, MAX(count) AS views, MAX(uniques) AS uniques,
+            MIN(captured_date) AS firstSeen, MAX(captured_date) AS lastSeen
+     FROM referrer_snapshot GROUP BY repo, referrer ORDER BY repo ASC, views DESC`
+  ).all<PeakReferrer & { repo: string }>();
+  return res.results;
+}

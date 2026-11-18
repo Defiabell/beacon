@@ -8,14 +8,16 @@ import type { MetricCoverage } from "../metrics";
 // verbatim (class names, layout). See task-12-report.md for the handful of
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
-import type { Overview, ProjectDetail, ProjectSiteReferrals, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SiteRow, SurfaceBreakdown, WorkerTotal } from "../api/public";
+import type { Overview, OverviewTrend, ProjectDetail, ProjectSiteReferrals, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SiteRow, SurfaceBreakdown, WorkerTotal } from "../api/public";
+import { TREND_WINDOWS, type TrendsData, type TrendGroup, type DaySeries } from "../api/trends";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, EventAttribution, ImpactWindow } from "../impact/attribute";
 import { CONFIG, isZoneSite, siteFor } from "../config";
-import { page, svgSparkline, esc, type SparkMarker } from "./layout";
+import { page, esc } from "./layout";
+import { dayChart, hasGaps, icon, rankList, sparkBars, statTile, sumOrNull, windowDeltaPct, fmtInt, fmtDay, type ChartMarker, type RankRow } from "./charts";
 
-type NavKey = "overview" | "matrix" | "todos" | "posts" | "impact" | null;
+type NavKey = "overview" | "trends" | "matrix" | "todos" | "posts" | "impact" | null;
 
 const SOURCE_LABELS: Record<string, string> = { audit: "体检", matrix: "矩阵", manual: "手动" };
 const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", cloudflare: "Cloudflare", audit: "体检" };
@@ -54,12 +56,14 @@ function authLink(authed: boolean): string {
 // across overview/matrix/todos/posts; the project detail page uses a
 // simpler "← 返回总览" nav instead (matches design/pages/project.html), so it
 // builds its own header rather than calling this.
+const LOGO = `<span class="logo">${icon("beacon", 16)}beacon</span>`;
+
 function navHeader(active: NavKey, authed: boolean): string {
-  const link = (href: string, label: string, key: NavKey) =>
-    `<a${key === active ? ' class="active"' : ""} href="${href}">${label}</a>`;
+  const link = (href: string, label: string, key: NavKey & string) =>
+    `<a${key === active ? ' class="active"' : ""} href="${href}">${icon(key, 15)}${label}</a>`;
   return (
-    `<header><span class="logo">beacon</span><nav>` +
-    `${link("/", "总览", "overview")}${link("/matrix", "渠道矩阵", "matrix")}` +
+    `<header>${LOGO}<nav>` +
+    `${link("/", "总览", "overview")}${link("/trends", "趋势", "trends")}${link("/matrix", "渠道矩阵", "matrix")}` +
     `${link("/todos", "待办", "todos")}${link("/posts", "帖子", "posts")}${link("/impact", "效果", "impact")}` +
     `${authLink(authed)}` +
     `</nav></header>`
@@ -89,6 +93,11 @@ function deltaArrow(n: number): string {
 
 function fmtNum(n: number | null | undefined): string {
   return n === null || n === undefined ? "—" : String(n);
+}
+
+// Thousands-separated variant for the larger figures (site and Worker totals).
+function fmtCount(n: number | null | undefined): string {
+  return n === null || n === undefined ? "—" : fmtInt(n);
 }
 
 // SQLite datetime('now')/ISO timestamps both start "YYYY-MM-DD..."; trimming
@@ -168,10 +177,6 @@ function renderActionItem(item: ActionItem): string {
   );
 }
 
-// ProjectSummary carries no time-series data (that only exists on
-// ProjectDetail.repoSeries/starSeries) — deliberately no sparkline on the
-// overview cards, per task-12-brief; the project detail page has the real
-// chart. See task-12-report.md.
 function coverageNote(c?: MetricCoverage): string {
   if (!c) return '';
   const labels = { complete: '数据完整', partial: '部分数据', missing: '数据缺失', failed: '采集失败', stale: '采集已过期', unconfigured: '未配置' };
@@ -188,8 +193,9 @@ function projectCard(p: ProjectSummary): string {
 <h3><a href="/p/${encodeURIComponent(p.project)}">${esc(p.project)}</a></h3>
 <p class="repo">${esc(p.repo)}${tags ? " · " + esc(tags) : ""}</p>
 <div class="stat-row"><span class="big">${fmtNum(p.stars)}</span><span class="unit">stars</span><span class="delta">${p.starsDelta7d === null ? "—" : deltaArrow(p.starsDelta7d)} 快照内近 7 天</span></div>
+${p.viewsSeries ? sparkBars(p.viewsSeries, { title: "每日 views，最近 14 个完整 UTC 日" }) : ""}
 <div class="foot"><span class="chip">views 14d ${fmtNum(p.views14d)}</span><span class="chip">clones 14d ${fmtNum(p.clones14d)}${machineNote}</span><span class="chip">帖子 ${p.postCount}</span>${referrerChip}</div>
-${coverageNote(p.trafficCoverage)}${p.starsAsOf ? `<p class="sub">Star 快照：${esc(p.starsAsOf)}</p>` : ""}
+${quietCoverageNote(p.trafficCoverage)}${p.starsAsOf ? `<p class="sub">Star 快照：${esc(p.starsAsOf)}</p>` : ""}
 </div>`;
 }
 
@@ -226,16 +232,16 @@ function siteSurfacesSection(s: SurfaceBreakdown | undefined): string {
 }
 
 function surfaceList(title: string, sub: string, s: SurfaceBreakdown, unknownIntro: string): string {
-  const rows = s.surfaces
-    .map(r => {
-      const hosts = r.hosts.length ? `<span class="src">${esc(r.hosts.slice(0, 4).join(" · "))}${r.hosts.length > 4 ? " …" : ""}</span>` : "";
-      const nums = r.views === 0 ? `<span class="effect">—</span>` : `<span class="effect">${r.views} / ${r.uniques}</span>`;
-      return (
-        `<li${r.views === 0 ? ' class="dim"' : ""}>` +
-        `<span class="proj" title="${esc(r.note)}">${esc(r.name)}</span>${hosts}${nums}</li>`
-      );
-    })
-    .join("");
+  // Ranked bars in the surface catalogue's own order (not sorted by size): the
+  // rows are a fixed checklist of kinds of place, and an empty one staying in
+  // its slot is how "nobody came from there" gets noticed.
+  const rows: RankRow[] = s.surfaces.map(r => ({
+    nameHtml: `<span title="${esc(r.note)}">${esc(r.name)}</span>`,
+    value: r.views,
+    valueText: r.views === 0 ? "—" : `${fmtInt(r.views)} / ${fmtInt(r.uniques)}`,
+    dim: r.views === 0,
+    extraHtml: r.hosts.length ? `<span class="src">${esc(r.hosts.slice(0, 4).join(" · "))}${r.hosts.length > 4 ? " …" : ""}</span>` : ""
+  }));
 
   // Unclassified referrers are listed by name. An unknown host is either a new
   // surface worth adding or someone scraping the repo, and both only get
@@ -250,9 +256,9 @@ function surfaceList(title: string, sub: string, s: SurfaceBreakdown, unknownInt
     : "";
 
   return `<section class="actions">
-<h2>${esc(title)}</h2>
+<h2>${icon("compass")}${esc(title)}</h2>
 <p class="sub">${sub}</p>
-<ul class="plain">${rows}</ul>
+${rankList(rows)}
 ${unknown}
 </section>`;
 }
@@ -265,33 +271,61 @@ ${unknown}
 // 一个条目对应一个 hostname，这是 Web Analytics 划分站点的方式 ——
 // defiabell.github.io 一行同时包含博客和 /nightide/ 下的游戏。
 function sitesSection(sites: SiteRow[]): string {
+  const RANK_W = { valueWidth: 176 };
   if (sites.length === 0) {
-    return `<section class="actions"><h2>网站访问量</h2>
+    return `<section class="actions"><h2>${icon("globe")}网站访问量</h2>
 <p class="sub">暂无数据。Cloudflare Web Analytics 采集尚未运行，或站点刚接入还没攒够一天。</p></section>`;
   }
-  const rows = sites
-    .map(s => {
-      const cfg = siteFor(CONFIG.sites, s.site);
-      // A zone-level entry names the zone, not the host under it; the host is
-      // the more useful label there, and the zone name goes in the tooltip.
-      const label = !cfg || isZoneSite(cfg) ? s.site : cfg.name;
-      // Rendered even at 0 — "no AI referrals this week" is the reading, and a
-      // chip that only appears once the number is positive hides it.
-      const ai = s.aiPageviews7d === undefined || s.aiPageviews7d === null
-        ? ""
-        : `<span class="chip" title="来自 AI 答案引擎（ChatGPT、Perplexity、Claude、Gemini、Copilot……）的页面浏览，7 天">AI 引荐 ${s.aiPageviews7d}</span>`;
-      return (
-        `<li><span class="proj" title="${esc(cfg && isZoneSite(cfg) ? cfg.name : s.site)}">${esc(label)}</span>` +
-        `<span class="src">${esc(s.site)}</span>${ai}` +
-        `<span class="effect">${fmtNum(s.pageviews)} 次浏览 / ${fmtNum(s.visitors)} 次访问</span>${coverageNote(s.coverage)}</li>`
-      );
-    })
-    .join("");
+  const row = (s: SiteRow): RankRow => {
+    const cfg = siteFor(CONFIG.sites, s.site);
+    // A zone-level entry names the zone, not the host under it; the host is
+    // the more useful label there, and the zone name goes in the tooltip.
+    const label = !cfg || isZoneSite(cfg) ? s.site : cfg.name;
+    // Rendered even at 0 — "no AI referrals this week" is the reading, and a
+    // chip that only appears once the number is positive hides it.
+    const ai = s.aiPageviews7d === undefined || s.aiPageviews7d === null
+      ? ""
+      : `<span class="chip" title="来自 AI 答案引擎（ChatGPT、Perplexity、Claude、Gemini、Copilot……）的页面浏览，7 天">AI 引荐 ${s.aiPageviews7d}</span>`;
+    const host = label === s.site ? "" : `<span class="src">${esc(s.site)}</span>`;
+    return {
+      nameHtml: `<span title="${esc(cfg && isZoneSite(cfg) ? cfg.name : s.site)}">${esc(label)}</span>`,
+      value: s.pageviews,
+      valueText: `${fmtCount(s.pageviews)} 次浏览 / ${fmtCount(s.visitors)} 次访问`,
+      dim: !s.pageviews,
+      spark: s.series ? sparkBars(s.series, { title: "每日浏览，最近 14 个完整 UTC 日" }) : "",
+      tagsHtml: host + ai,
+      extraHtml: quietCoverageNote(s.coverage)
+    };
+  };
+  const { busy, quiet } = splitQuiet(sites, s => s.pageviews, s => s.coverage);
   return `<section class="actions">
-<h2>网站访问量</h2>
-<p class="sub">最近 7 个完整 UTC 日，来自 Cloudflare Web Analytics；缺失日期不补作零，部分数据仅为已记录合计。「浏览」是页面加载次数，「访问」是会话数——都不是独立访客数。一行一个域名，defiabell.github.io 含博客与 /nightide/ 游戏。</p>
-<ul class="plain">${rows}</ul>
+<h2>${icon("globe")}网站访问量<a class="more" href="/trends">看每日趋势 →</a></h2>
+<p class="sub">最近 7 个完整 UTC 日，来自 Cloudflare Web Analytics；缺失日期不补作零，部分数据仅为已记录合计，未另外标注的行 7 天数据完整。「浏览」是页面加载次数，「访问」是会话数——都不是独立访客数。条形按浏览量，小图是最近 14 天逐日浏览。一行一个域名，defiabell.github.io 含博客与 /nightide/ 游戏。</p>
+${busy.length ? rankList(busy.map(row), RANK_W) : ""}
+${quiet.length ? `<details class="fold"${busy.length ? "" : " open"}><summary>另有 ${quiet.length} 个站点近 7 天没有浏览或暂无数据</summary>${rankList(quiet.map(row), RANK_W)}</details>` : ""}
 </section>`;
+}
+
+// The coverage note, minus the rows where it says nothing: a fully recorded
+// window. A list of forty "数据完整 · 已记录 7/7 天" lines buries the three rows
+// that are actually partial or failed.
+function quietCoverageNote(c?: MetricCoverage): string {
+  return !c || c.status === "complete" ? "" : coverageNote(c);
+}
+
+// Splits a ranked list into rows with a reading and rows without one (zero or
+// no data), so the second group can sit behind a disclosure instead of
+// stretching the page. A row whose collection failed or went stale never goes
+// behind it, whatever its number: that is a problem to see, not a quiet site.
+function splitQuiet<T>(rows: T[], value: (row: T) => number | null, coverage: (row: T) => MetricCoverage | undefined): { busy: T[]; quiet: T[] } {
+  const busy: T[] = [];
+  const quiet: T[] = [];
+  for (const r of rows) {
+    const status = coverage(r)?.status;
+    if ((value(r) ?? 0) > 0 || status === "failed" || status === "stale") busy.push(r);
+    else quiet.push(r);
+  }
+  return { busy, quiet };
 }
 
 // Worker request counts. Separate from the surfaces section above because it
@@ -306,25 +340,61 @@ function sitesSection(sites: SiteRow[]): string {
 const MEASURED_REQUESTS_PER_VISIT: Record<string, number> = { "shotsync-demo": 14 };
 
 function workersSection(workers: WorkerTotal[]): string {
+  const RANK_W = { valueWidth: 64 };
   if (workers.length === 0) {
-    return `<section class="actions"><h2>自有服务请求量</h2>
+    return `<section class="actions"><h2>${icon("server")}自有服务请求量</h2>
 <p class="sub">暂无数据。Cloudflare 采集尚未运行或未配置（需要 CLOUDFLARE_ACCOUNT_ID 与 CLOUDFLARE_API_TOKEN）。</p></section>`;
   }
-  const rows = workers
-    .map(w => {
-      const divisor = MEASURED_REQUESTS_PER_VISIT[w.script];
-      const est = divisor && w.requests !== null && (!w.coverage || w.coverage.status === "complete")
-        ? `<span class="src" title="按实测每次首屏访问 ${divisor} 个请求粗算；回访命中缓存会更少，点开大图会更多，且请求数不区分爬虫">约 ${Math.round(w.requests / divisor)} 次访问</span>`
-        : "";
-      const err = (w.errors ?? 0) > 0 ? `<span class="src">错误 ${w.errors}</span>` : "";
-      return `<li><span class="proj">${esc(w.script)}</span>${est}${err}<span class="effect">${fmtNum(w.requests)}</span>${coverageNote(w.coverage)}</li>`;
-    })
-    .join("");
+  const row = (w: WorkerTotal): RankRow => {
+    const divisor = MEASURED_REQUESTS_PER_VISIT[w.script];
+    const est = divisor && w.requests !== null && (!w.coverage || w.coverage.status === "complete")
+      ? `<span class="src" title="按实测每次首屏访问 ${divisor} 个请求粗算；回访命中缓存会更少，点开大图会更多，且请求数不区分爬虫">约 ${Math.round(w.requests / divisor)} 次访问</span>`
+      : "";
+    const err = (w.errors ?? 0) > 0 ? `<span class="src">错误 ${w.errors}</span>` : "";
+    return {
+      nameHtml: esc(w.script),
+      value: w.requests,
+      valueText: fmtCount(w.requests),
+      dim: !w.requests,
+      spark: w.series ? sparkBars(w.series, { title: "每日请求数，最近 14 个完整 UTC 日" }) : "",
+      tagsHtml: est + err,
+      extraHtml: quietCoverageNote(w.coverage)
+    };
+  };
+  const { busy, quiet } = splitQuiet(workers, w => w.requests, w => w.coverage);
   return `<section class="actions">
-<h2>自有服务请求量</h2>
-<p class="sub">最近 7 个完整 UTC 日 Cloudflare Worker / Pages Functions 的<strong>请求数</strong>——不是访问数，一次首屏访问会打多个请求。只有实测过换算比的脚本才给访问估算。</p>
-<ul class="plain">${rows}</ul>
+<h2>${icon("server")}自有服务请求量<a class="more" href="/trends">看每日趋势 →</a></h2>
+<p class="sub">最近 7 个完整 UTC 日 Cloudflare Worker / Pages Functions 的<strong>请求数</strong>——不是访问数，一次首屏访问会打多个请求。只有实测过换算比的脚本才给访问估算。小图是最近 14 天逐日请求数。</p>
+${busy.length ? rankList(busy.map(row), RANK_W) : ""}
+${quiet.length ? `<details class="fold"${busy.length ? "" : " open"}><summary>另有 ${quiet.length} 个脚本近 7 天没有请求或暂无数据</summary>${rankList(quiet.map(row), RANK_W)}</details>` : ""}
 </section>`;
+}
+
+// The overview's headline row: last 7 complete UTC days against the 7 before,
+// with the 14 daily values as a sparkline (the earlier week in gray). Every
+// tile links to /trends, where the same numbers are laid out day by day.
+function overviewTiles(t: OverviewTrend | undefined): string {
+  if (!t) return "";
+  const half = Math.floor(t.dates.length / 2);
+  const traffic = (iconName: string, label: string, series: DaySeries) =>
+    statTile({
+      icon: iconName,
+      label,
+      period: "近 7 天",
+      value: sumOrNull(series.slice(half)),
+      deltaPct: windowDeltaPct(series.slice(half), series.slice(0, half)),
+      deltaNote: "较前 7 天",
+      spark: series,
+      sparkAccentFrom: half,
+      href: "/trends?days=7"
+    });
+  return `<div class="tiles">${
+    traffic("globe", "网站浏览", t.sitePageviews) +
+    traffic("users", "网站访问", t.siteVisits) +
+    traffic("eye", "仓库浏览", t.repoViews) +
+    statTile({ icon: "star", label: "Star 总数", period: "全部仓库", value: t.stars, deltaAbs: t.starsDelta7d, deltaNote: "近 7 天", href: "/trends" }) +
+    traffic("server", "服务请求", t.workerRequests)
+  }</div>`;
 }
 
 export function renderOverview(o: Overview, authed: boolean): string {
@@ -333,8 +403,9 @@ export function renderOverview(o: Overview, authed: boolean): string {
   const body = `${navHeader("overview", authed)}
 <main>
 ${freshnessBar(o.sources)}
+${overviewTiles(o.trend)}
 <section class="actions">
-<h2>本周建议行动</h2>
+<h2>${icon("bolt")}本周建议行动</h2>
 <p class="sub">来自曝光体检与渠道矩阵，按优先级排序——做完一条，曲线会告诉你值不值。</p>
 <ol class="todo">${actions}</ol>
 </section>
@@ -348,6 +419,14 @@ ${workersSection(o.workers)}
 }
 
 // ---- project detail --------------------------------------------------------
+
+// Share of applicable checks that pass (n/a checks are out of the ratio).
+function auditMeter(audit: CheckResult[]): string {
+  const pass = audit.filter(a => a.status === "pass").length;
+  const applicable = pass + audit.filter(a => a.status === "fail").length;
+  if (applicable === 0) return "";
+  return `<div class="meter" role="img" aria-label="${pass} / ${applicable} 项通过"><i style="width:${Math.round((pass / applicable) * 100)}%"></i></div>`;
+}
 
 function renderAuditItem(a: CheckResult & { checkedAt: string }): string {
   const cls = a.status === "pass" ? "ok" : a.status === "fail" ? "bad" : "na";
@@ -431,30 +510,44 @@ function postsTable(rows: PostWithMetrics[], opts: { showProject: boolean; showD
   return `<div class="scroll"><table><tr>${head}</tr>${body}</table></div>`;
 }
 
-// Maps each event onto its index in a dated series so svgSparkline can draw a
-// vertical marker there — the point of the whole feature is that a spike and
-// the action that caused it line up visually. An event whose date isn't in
-// this particular series (older than the chart window, or a day GitHub never
-// reported) is dropped rather than clamped to an edge: a marker on the wrong
-// day would assert a causal link that isn't there.
-function eventMarkers(events: EventImpact[] | undefined, dates: string[]): SparkMarker[] {
-  if (!events) return [];
-  const indexOfDate = new Map(dates.map((d, i) => [d, i]));
-  return events.flatMap(e => {
-    const index = indexOfDate.get(e.event.date);
-    return index === undefined ? [] : [{ index, label: `${e.event.date} ${e.event.title}` }];
-  });
+// The project's events as dated chart annotations — the point of drawing them
+// is that a spike and the action that caused it line up on the same day.
+// dayChart matches a marker to a column by date and ignores one whose date is
+// not on the chart (older than the window): a marker clamped to the nearest
+// edge would assert a link to a day it did not happen on.
+function eventMarkers(events: EventImpact[] | undefined): ChartMarker[] {
+  return (events ?? []).map(e => ({ date: e.event.date, label: e.event.title }));
+}
+
+// The notes under a chart that explain marks which are not data: the gray
+// wash of an unrecorded day, and the event rule. Each appears only when the
+// chart actually contains one.
+function chartNotes(dates: string[], series: DaySeries[], markers: ChartMarker[] = []): string {
+  const gaps = series.some(hasGaps) ? `<span class="key"></span>灰底 = 当天无记录（不是 0）` : "";
+  const shown = new Set(dates);
+  const events = markers.some(m => shown.has(m.date)) ? `<span class="key ev"></span>竖线 = 当天有发帖或完成的待办，悬停看标题` : "";
+  return gaps || events ? `<p class="chart-note">${gaps}${events}</p>` : "";
 }
 
 export function renderProject(name: string, d: ProjectDetail, authed: boolean): string {
   const s = d.summary;
   const failCount = d.audit.filter(a => a.status === "fail").length;
-  const starMarks = eventMarkers(d.events, d.starSeries.map(r => r.date));
-  const repoMarks = eventMarkers(d.events, d.repoSeries.map(r => r.date));
-  const starSpark = svgSparkline(d.starSeries.map(r => r.stars), 640, 90, starMarks);
-  const viewsSpark = svgSparkline(d.repoSeries.map(r => r.views), 300, 48, repoMarks);
-  const clonesSpark = svgSparkline(d.repoSeries.map(r => r.clones), 300, 48, repoMarks);
-  const header = `<header><span class="logo">beacon</span><nav><a href="/">← 返回总览</a>${authLink(authed)}</nav></header>`;
+  // One calendar for all three charts. buildProjectDetail supplies the last 90
+  // complete UTC days; without it (older callers) fall back to whichever days
+  // happen to be recorded.
+  const dates = d.chartDates ?? [...new Set([...d.starSeries.map(r => r.date), ...d.repoSeries.map(r => r.date)])].sort();
+  const starByDate = new Map(d.starSeries.map(r => [r.date, r.stars]));
+  const repoByDate = new Map(d.repoSeries.map(r => [r.date, r]));
+  const stars = dates.map(date => starByDate.get(date) ?? null);
+  const views = dates.map(date => repoByDate.get(date)?.views ?? null);
+  const uniqueViews = dates.map(date => repoByDate.get(date)?.uniqueViews ?? null);
+  const clones = dates.map(date => repoByDate.get(date)?.clones ?? null);
+  const uniqueClones = dates.map(date => repoByDate.get(date)?.uniqueClones ?? null);
+  const markers = eventMarkers(d.events);
+  const starChart = dayChart({ dates, values: stars, label: "star", kind: "line", height: 150, markers });
+  const viewsChart = dayChart({ dates, values: views, label: "views", extra: [{ label: "独立访客", values: uniqueViews }], height: 110, markers });
+  const clonesChart = dayChart({ dates, values: clones, label: "clones", extra: [{ label: "独立 clone", values: uniqueClones }], height: 110, markers });
+  const header = `<header>${LOGO}<nav><a href="/">← 返回总览</a>${authLink(authed)}</nav></header>`;
   // Review item 1: same human/machine disclosure as the overview card (see
   // projectCard) — the clone curve below stays raw/unfiltered (design doc §3
   // never touches repo_daily itself), this note just labels what the "clones
@@ -469,36 +562,38 @@ export function renderProject(name: string, d: ProjectDetail, authed: boolean): 
 <div class="cols">
 <div>
 <div class="card">
-<h2>Star 增长</h2>
-<p class="sub">累计 star 数（stargazer 时间戳回填）</p>
+<h2>${icon("star")}Star 增长</h2>
+<p class="sub">累计 star 数，每日快照；曲线为最近 90 个完整 UTC 日，悬停看当天数字。</p>
 <div class="hero"><div><div class="n">${fmtNum(s.stars)}</div><div class="l">stars</div></div><div><div class="delta">${s.starsDelta7d === null ? "—" : deltaArrow(s.starsDelta7d)}</div><div class="l">快照内近 7 天</div></div></div>
 ${s.starsAsOf ? `<p class="sub">Star 快照：${esc(s.starsAsOf)}</p>` : ""}
-${starSpark || `<p class="sub">暂无数据</p>`}
+${starChart ? starChart + chartNotes(dates, [stars], markers) : `<p class="sub">暂无数据</p>`}
 </div>
 <div class="card">
-<h2>仓库流量 · 最近 90 个完整 UTC 日</h2>
-<p class="sub">GitHub traffic；下方数字为最近 14 个完整 UTC 日，曲线为 90 日内已有记录。曲线按有记录日期排列，缺失日期不视为零。</p>
+<h2>${icon("eye")}仓库流量 · 最近 90 个完整 UTC 日</h2>
+<p class="sub">GitHub traffic；大数字为最近 14 个完整 UTC 日合计，柱状图一天一根，悬停看当天数字。缺失日期不视为零。</p>
 ${coverageNote(s.trafficCoverage)}
 <div class="two">
-<div><div class="hero"><div><div class="n">${fmtNum(s.views14d)}</div><div class="l">views · 14d</div></div></div>${viewsSpark}</div>
-<div><div class="hero"><div><div class="n">${fmtNum(s.clones14d)}</div><div class="l">clones · 14d</div></div></div>${machineCloneNote}${clonesSpark}</div>
+<div><div class="hero"><div><div class="n">${fmtNum(s.views14d)}</div><div class="l">views · 14d</div></div></div>${viewsChart}</div>
+<div><div class="hero"><div><div class="n">${fmtNum(s.clones14d)}</div><div class="l">clones · 14d</div></div></div>${machineCloneNote}${clonesChart}</div>
 </div>
+${chartNotes(dates, [views, clones], markers)}
 </div>
 <div class="card">
-<h2>帖子表现</h2>
+<h2>${icon("posts")}帖子表现</h2>
 ${postsTable(d.posts, { showProject: false, showDate: false })}
 </div>
 </div>
 <div>
 <div class="card">
-<h2>流量来源</h2>
+<h2>${icon("compass")}流量来源</h2>
 <p class="sub">referrers · 最新快照</p>
 ${renderReferrersTable(d.referrers)}
 </div>
 ${siteReferralsCard(d.siteReferrals)}
 <div class="card">
-<h2>曝光体检</h2>
+<h2>${icon("todos")}曝光体检</h2>
 <p class="sub">${d.audit.length} 项检查 · ${failCount} 项待修</p>
+${auditMeter(d.audit)}
 <ul class="audit">${d.audit.map(renderAuditItem).join("") || `<li class="na">暂无体检数据</li>`}</ul>
 </div>
 </div>
@@ -836,7 +931,7 @@ ${postsTable(rows, { showProject: true, showDate: true })}
 // fetch: correct token -> 303 + Set-Cookie (session.ts); wrong token ->
 // session.ts re-renders this exact page with error=true at HTTP 401.
 export function renderLogin(error: boolean): string {
-  const body = `<header><span class="logo">beacon</span></header>
+  const body = `<header>${LOGO}</header>
 <main>
 <h1>登录</h1>
 <p class="lead">输入管理员令牌以启用编辑功能。</p>
@@ -952,4 +1047,160 @@ export function renderImpact(impacts: EventImpact[], authed: boolean): string {
 ${rows ? `<ol class="impact">${rows}</ol>` : `<p class="sub">暂无事件。登记一篇帖子或做完一条待办，这里就会出现它的效果。</p>`}
 </main>`;
   return page("beacon · 效果归因", body);
+}
+
+// ---- trends ----------------------------------------------------------------
+
+const SMALL_MULTIPLES_LIMIT = 8;
+
+function rangeFilter(active: number): string {
+  return `<div class="filters">${TREND_WINDOWS.map(
+    d => `<a class="filter${d === active ? " on" : ""}" href="/trends?days=${d}">近 ${d} 天</a>`
+  ).join("")}</div>`;
+}
+
+// One mini chart per entity, busiest first. Each has its own vertical scale —
+// the question a small multiple answers is "what is this one's shape", and a
+// shared scale would flatten every site but the largest into the baseline. The
+// total printed beside each name is what makes them comparable.
+function smallMultiples(groups: (TrendGroup & { extra?: { label: string; values: DaySeries }[] })[], dates: string[], label: string, unit: string): string {
+  const active = groups.filter(g => (g.total ?? 0) > 0);
+  if (active.length === 0) return "";
+  const shown = active.slice(0, SMALL_MULTIPLES_LIMIT);
+  const overflow = active.slice(SMALL_MULTIPLES_LIMIT);
+  const idle = groups.length - active.length;
+  const charts = shown
+    .map(g => {
+      const name = g.href
+        ? `<a class="name" href="${esc(g.href)}" title="${esc(g.key)}">${esc(g.label)}</a>`
+        : `<span class="name" title="${esc(g.key)}">${esc(g.label)}</span>`;
+      return (
+        `<div class="sm"><div class="sm-h">${name}<b>${fmtCount(g.total)}</b></div>` +
+        dayChart({ dates, values: g.values, label, extra: g.extra, mini: true, ariaLabel: `${g.label} ${label}，按天` }) +
+        `</div>`
+      );
+    })
+    .join("");
+  const rest =
+    overflow.length || idle
+      ? `<p class="rest">${overflow.length ? `其余：${overflow.map(g => `${esc(g.label)} ${fmtCount(g.total)}`).join(" · ")}。` : ""}` +
+        `${idle ? `另有 ${idle} 个本期${esc(unit)}为 0 或无记录。` : ""}</p>`
+      : "";
+  return `<div class="multi">${charts}</div><p class="chart-note">各小图纵轴独立，只看各自的起伏；互相比较看名字右侧的合计。</p>${rest}`;
+}
+
+function trendTiles(t: TrendsData): string {
+  const period = `近 ${t.days} 天`;
+  const note = `较前 ${t.days} 天`;
+  const tile = (iconName: string, label: string, m: { values: DaySeries; previous: DaySeries }) =>
+    statTile({ icon: iconName, label, period, value: sumOrNull(m.values), deltaPct: windowDeltaPct(m.values, m.previous), deltaNote: note });
+  return `<div class="tiles">${
+    tile("globe", "网站浏览", t.site.pageviews) +
+    tile("users", "网站访问", t.site.visits) +
+    tile("eye", "仓库浏览", t.repo.views) +
+    tile("clone", "人类 clone", t.repo.clones) +
+    statTile({ icon: "star", label: "Star 总数", period: "全部仓库", value: t.stars.latest, deltaAbs: t.stars.gained, deltaNote: period }) +
+    tile("server", "服务请求", t.workers.requests)
+  }</div>`;
+}
+
+function chartOrEmpty(chart: string, empty: string): string {
+  return chart || `<p class="sub">${empty}</p>`;
+}
+
+// The table twin of every chart on the page: one row per day, newest first.
+// Nothing here is reachable only by hovering a bar.
+function dailyTable(t: TrendsData): string {
+  const cell = (v: number | null) => (v === null ? `<td class="num none">—</td>` : `<td class="num">${fmtInt(v)}</td>`);
+  const rows = t.dates
+    .map((date, i) => {
+      // Day-over-day star change, against the nearest earlier day that has a
+      // snapshot (a missed collection day must not read as a jump or a zero).
+      const stars = t.stars.total[i];
+      let prev: number | null = null;
+      for (let j = i - 1; j >= 0 && prev === null; j--) prev = t.stars.total[j];
+      const gained = stars !== null && prev !== null && stars !== prev ? stars - prev : null;
+      const starCell =
+        stars === null
+          ? `<td class="num none">—</td>`
+          : `<td class="num">${fmtInt(stars)}${gained !== null ? `<span class="d-up">${gained > 0 ? "+" : "−"}${Math.abs(gained)}</span>` : ""}</td>`;
+      return (
+        `<tr><td>${esc(fmtDay(date))}</td>${cell(t.site.pageviews.values[i])}${cell(t.site.visits.values[i])}` +
+        `${cell(t.repo.views.values[i])}${cell(t.repo.clones.values[i])}${starCell}${cell(t.workers.requests.values[i])}</tr>`
+      );
+    })
+    .reverse()
+    .join("");
+  return `<details class="card tbl"${t.days <= 30 ? " open" : ""}>
+<summary><h2 style="display:inline-flex">${icon("table")}逐日明细 · ${t.days} 天</h2></summary>
+<p class="sub">和上面图表同一份数据，一天一行，最新在上。「—」是当天无记录，不是 0。</p>
+<div class="scroll"><table class="daily"><tr><th>日期（UTC）</th><th class="num">网站浏览</th><th class="num">网站访问</th><th class="num">仓库浏览</th><th class="num">人类 clone</th><th class="num">Star 总数</th><th class="num">服务请求</th></tr>${rows}</table></div>
+</details>`;
+}
+
+export function renderTrends(t: TrendsData, authed: boolean): string {
+  const { dates } = t;
+  const siteChart = dayChart({ dates, values: t.site.pageviews.values, label: "浏览", extra: [{ label: "访问", values: t.site.visits.values }], height: 200 });
+  const repoChart = dayChart({
+    dates,
+    values: t.repo.views.values,
+    label: "views",
+    extra: [
+      { label: "独立访客", values: t.repo.uniques },
+      { label: "人类 clone", values: t.repo.clones.values }
+    ],
+    height: 180
+  });
+  const starChart = dayChart({ dates, values: t.stars.total, label: "star 总数", kind: "line", height: 180 });
+  const workerChart = dayChart({ dates, values: t.workers.requests.values, label: "请求", extra: [{ label: "错误", values: t.workers.errors }], height: 180 });
+
+  // Only repos that have stars: a column of ten "0" rows says nothing the
+  // line above it has not already said.
+  const starRows: RankRow[] = t.stars.byRepo
+    .filter(r => (r.latest ?? 0) > 0)
+    .map(r => ({
+      nameHtml: `<a href="/p/${encodeURIComponent(r.project)}">${esc(r.project)}</a>`,
+      value: r.latest,
+      dim: !r.latest,
+      valueText: `${fmtCount(r.latest)}${r.gained ? `（${r.gained > 0 ? "+" : "−"}${Math.abs(r.gained)}）` : ""}`
+    }));
+
+  const body = `${navHeader("trends", authed)}
+<main>
+<h1>趋势</h1>
+<p class="lead">每天一个数。所有图表按完整 UTC 日排列，最右一根是昨天；鼠标悬停（手机上点按）某一天看当天的具体数字，页面底部有同一份数据的表格。</p>
+${rangeFilter(t.days)}
+${freshnessBar(t.sources)}
+${trendTiles(t)}
+<section class="card">
+<h2>${icon("globe")}网站访问量 · 每天</h2>
+<p class="sub">全部站点合计的页面浏览（柱）与访问（悬停可见），来自 Cloudflare Web Analytics。</p>
+${chartOrEmpty(siteChart, "这段时间没有任何站点访问记录。")}
+${chartNotes(dates, [t.site.pageviews.values])}
+${smallMultiples(t.site.bySite.map(s => ({ ...s, extra: [{ label: "访问", values: s.visits }] })), dates, "浏览", "浏览")}
+</section>
+<section class="card">
+<h2>${icon("eye")}仓库流量 · 每天</h2>
+<p class="sub">全部仓库合计的 GitHub views（柱）；悬停可见独立访客与人类 clone（当天零访客的 clone 记为机器，不计入）。</p>
+${chartOrEmpty(repoChart, "这段时间没有仓库流量记录。")}
+${chartNotes(dates, [t.repo.views.values])}
+${smallMultiples(t.repo.byRepo, dates, "views", " views ")}
+</section>
+<section class="card">
+<h2>${icon("star")}Star · 每天</h2>
+<p class="sub">全部仓库的 star 总数，每日快照。纵轴不从 0 起，看的是增量。</p>
+${chartOrEmpty(starChart, "这段时间没有 star 快照。")}
+${chartNotes(dates, [t.stars.total])}
+${starRows.length ? `<div class="multi" style="display:block">${rankList(starRows)}</div><p class="chart-note">各仓库当前 star 数，括号内为本期变化。</p>` : ""}
+</section>
+<section class="card">
+<h2>${icon("server")}自有服务请求量 · 每天</h2>
+<p class="sub">全部 Worker / Pages Functions 合计的<strong>请求数</strong>（不是访问数，一次首屏访问会打多个请求）；悬停可见当天错误数。</p>
+${chartOrEmpty(workerChart, "这段时间没有请求量记录。")}
+${chartNotes(dates, [t.workers.requests.values])}
+${smallMultiples(t.workers.byScript, dates, "请求", "请求")}
+</section>
+${dailyTable(t)}
+</main>`;
+  return page("beacon · 趋势", body);
 }
