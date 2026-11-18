@@ -171,7 +171,7 @@ curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
 
 - `GET /` `/p/:project` `/matrix` `/todos` `/posts` `/impact` —— HTML dashboard
 - `GET /trends?days=7|30|90` —— 所有已存指标的逐日视图：站点浏览与访问、仓库 views 与 clone、star、Worker 请求数。每天一根柱，悬停看当天数字（纯 CSS，仍然没有 JavaScript），每个站点／仓库／脚本各有一张小图，页面底部是同一份数据的表格。当天没有记录画成空档，不画成 0
-- `GET /robots.txt` `/sitemap.xml` `/llms.txt` —— 由项目配置生成，地址用请求自己的域名
+- `GET /robots.txt` `/sitemap.xml` `/llms.txt` —— 由项目配置生成。在 `src/config.ts` 里把 `canonicalOrigin`（以及可选的 `ogImage`）改成你自己的地址：每个页面的描述、canonical 和分享预览标签都会指向它，从 `*.workers.dev` 地址访问时也一样
 - `GET /s/:host?days=7|30|90` —— 单个站点的逐日视图，以及每天的访客从哪来（Cloudflare 按天的来源；当天最大的几个来源就在柱子的悬停读数里）。zone 级站点下的子域从第一次有访问起自动纳入，不用改配置，之后没人来的日子记为 0
 - `GET /api/overview` `/api/trends?days=` `/api/site/:host?days=` `/api/matrix` `/api/posts` `/api/impact` `/api/health` `/api/todos?status=open|done` `/api/project/:name` —— 同样的数据，JSON 格式
 

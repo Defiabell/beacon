@@ -411,6 +411,7 @@ export function renderOverview(o: Overview, authed: boolean): string {
   const cards = o.projects.map(projectCard).join("") || `<p class="sub">暂无项目</p>`;
   const body = `${navHeader("overview", authed)}
 <main>
+<h1>总览</h1>
 ${freshnessBar(o.sources)}
 ${overviewTiles(o.trend)}
 <section class="actions">

@@ -47,10 +47,19 @@ export interface BeaconConfig {
   projects: ProjectConfig[];
   sites: SiteConfig[];
   dashboardTitle: string;
+  // The one address search engines should credit, e.g. "https://beacon.example.com".
+  // A Worker on a custom domain still answers on its *.workers.dev address, so
+  // without this every page exists twice. Omit to use whatever origin the
+  // request arrived on.
+  canonicalOrigin?: string;
+  // Absolute URL of the image link previews show (og:image). Omit for none.
+  ogImage?: string;
 }
 export const CONFIG: BeaconConfig = {
   githubUser: "Defiabell",
   dashboardTitle: "Defiabell / beacon",
+  canonicalOrigin: "https://beacon.defiabell.com",
+  ogImage: "https://raw.githubusercontent.com/Defiabell/beacon/main/docs/social-preview.png",
   projects: [
     // Build artifacts only (source lives in the private nightide-src); the
     // LICENSE is a deliberate all-rights-reserved notice, not an oversight.

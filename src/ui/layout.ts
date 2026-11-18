@@ -354,3 +354,51 @@ ${body}
 </body>
 </html>`;
 }
+
+// ---- <head> metadata ---------------------------------------------------------
+//
+// Description, canonical and link-preview tags, added to a rendered page by the
+// router (src/index.ts) rather than by each renderer: they depend on the
+// request (which path, which origin) and the renderers only know their data.
+
+export interface HeadMeta {
+  /** Origin every absolute URL is built on — the configured canonical one, else the request's. */
+  origin: string;
+  /** Pathname only. Query strings select a view of the same page (?days=, ?status=) and are left out of the canonical. */
+  path: string;
+  description: string;
+  siteName: string;
+  ogImage?: string;
+  /** Emit a WebSite JSON-LD node (the home page only). */
+  website?: boolean;
+}
+
+export function headTags(title: string, m: HeadMeta): string {
+  const url = m.origin + m.path;
+  const tags = [
+    `<meta name="description" content="${esc(m.description)}">`,
+    `<link rel="canonical" href="${esc(url)}">`,
+    `<meta property="og:type" content="website">`,
+    `<meta property="og:site_name" content="${esc(m.siteName)}">`,
+    `<meta property="og:title" content="${esc(title)}">`,
+    `<meta property="og:description" content="${esc(m.description)}">`,
+    `<meta property="og:url" content="${esc(url)}">`,
+    ...(m.ogImage ? [`<meta property="og:image" content="${esc(m.ogImage)}">`] : []),
+    `<meta name="twitter:card" content="${m.ogImage ? "summary_large_image" : "summary"}">`
+  ];
+  if (m.website) {
+    // JSON inside <script>: "<" is the only character that could end the
+    // element early, so it is escaped the JSON way.
+    const ld = JSON.stringify({ "@context": "https://schema.org", "@type": "WebSite", name: m.siteName, url: m.origin + "/", description: m.description, inLanguage: "zh-CN" }).replace(/</g, "\\u003c");
+    tags.push(`<script type="application/ld+json">${ld}</script>`);
+  }
+  return tags.join("\n");
+}
+
+/** Adds the tags to a document produced by page(). The title is read back from it so the two cannot drift. */
+export function withHeadMeta(html: string, m: HeadMeta): string {
+  const title = html.match(/<title>([^<]*)<\/title>/)?.[1] ?? "";
+  // The title in the document is already escaped; headTags escapes again, so undo it first.
+  const raw = title.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, "&");
+  return html.replace("</head>", `${headTags(raw, m)}\n</head>`);
+}

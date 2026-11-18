@@ -6,8 +6,10 @@
 // config the pages render from, so a project added to src/config.ts shows up
 // here without a second list to keep in step.
 //
-// Every absolute URL uses the request's own origin rather than a configured
-// one, so a self-hosted copy on another domain advertises itself correctly.
+// Absolute URLs use CONFIG.canonicalOrigin when it is set, so the copy of
+// these files served on the *.workers.dev address points at the real site
+// instead of describing a second one; without it they use the request's own
+// origin, so a self-hosted copy advertises itself correctly out of the box.
 import type { Env } from "../types";
 import { CONFIG } from "../config";
 import { listSourceRuns } from "../db";
@@ -88,7 +90,7 @@ ${projects}
 
 export async function handleWellKnown(req: Request, env: Env, path: string): Promise<Response | null> {
   if (req.method !== "GET") return null;
-  const origin = new URL(req.url).origin;
+  const origin = CONFIG.canonicalOrigin ?? new URL(req.url).origin;
   if (path === "/robots.txt") return text(robotsTxt(origin), "text/plain; charset=utf-8");
   if (path === "/llms.txt") return text(llmsTxt(origin), "text/plain; charset=utf-8");
   if (path === "/sitemap.xml") {

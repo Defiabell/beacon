@@ -10,6 +10,8 @@ import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, 
 import { buildTrends, buildSiteDetail, parseTrendWindow } from "./api/trends";
 import { handleWellKnown } from "./api/wellknown";
 import { isAuthed, hasAdminCredential } from "./auth";
+import { CONFIG } from "./config";
+import { withHeadMeta } from "./ui/layout";
 
 const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
 // CRITICAL: an authenticated page renders extra write controls (see
@@ -24,6 +26,25 @@ function htmlOk(body: string, cacheControl: string): Response {
     status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": cacheControl }
   });
+}
+
+// One line per view for search results and link previews. Kept here with the
+// routes so a new page cannot be added without deciding what it says.
+const PAGE_DESCRIPTIONS: Record<string, string> = {
+  "/": "beacon 记录一组个人项目每天的 GitHub star、仓库流量、网站访问和来源，并列出本周该做的曝光动作。",
+  "/trends": "网站浏览、仓库流量、star 和服务请求的逐日图表，可切换近 7、30、90 天。",
+  "/matrix": "项目与发布渠道的覆盖矩阵：哪些已经发过、每个渠道实测带来多少访问、下一步发哪里。",
+  "/todos": "曝光体检生成的待办：每个仓库缺的描述、标签、截图、分享图等，修好后自动关闭。",
+  "/posts": "已登记的帖子，以及它们每天的回复数和浏览数。",
+  "/impact": "每一次发帖和每一条做完的待办，对照前后 7 天的流量变化与来源归因。"
+};
+
+function seoHtml(req: Request, path: string, description: string, body: string, cacheControl: string): Response {
+  const origin = CONFIG.canonicalOrigin ?? new URL(req.url).origin;
+  return htmlOk(
+    withHeadMeta(body, { origin, path, description, siteName: "beacon", ogImage: CONFIG.ogImage, website: path === "/" }),
+    cacheControl
+  );
 }
 
 function notFound(): Response {
@@ -64,7 +85,9 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
   const authed = isAuthed(req, env);
   const cacheControl = authed ? PRIVATE_CACHE_CONTROL : PUBLIC_CACHE_CONTROL;
 
-  if (path === "/") return htmlOk(renderOverview(await buildOverview(env), authed), cacheControl);
+  const described = (body: string) => seoHtml(req, path, PAGE_DESCRIPTIONS[path], body, cacheControl);
+
+  if (path === "/") return described(renderOverview(await buildOverview(env), authed));
 
   const projectMatch = path.match(PROJECT_PAGE_PATH);
   if (projectMatch) {
@@ -72,12 +95,12 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
     if (name === null) return notFound();
     const detail = await buildProjectDetail(env, name);
     if (!detail) return notFound();
-    return htmlOk(renderProject(name, detail, authed), cacheControl);
+    return seoHtml(req, path, `${name} 的 star 增长、仓库流量、访问来源、帖子表现和曝光体检结果。`, renderProject(name, detail, authed), cacheControl);
   }
 
   if (path === "/trends") {
     const days = parseTrendWindow(new URL(req.url).searchParams.get("days"));
-    return htmlOk(renderTrends(await buildTrends(env, days), authed), cacheControl);
+    return described(renderTrends(await buildTrends(env, days), authed));
   }
 
   const siteMatch = path.match(SITE_PAGE_PATH);
@@ -86,21 +109,21 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
     if (host === null) return notFound();
     const detail = await buildSiteDetail(env, host, parseTrendWindow(new URL(req.url).searchParams.get("days")));
     if (!detail) return notFound();
-    return htmlOk(renderSite(detail, authed), cacheControl);
+    return seoHtml(req, path, `${detail.host} 每天的页面浏览、访问数，以及访客从哪里来。`, renderSite(detail, authed), cacheControl);
   }
 
-  if (path === "/matrix") return htmlOk(renderMatrix(await buildMatrix(env), authed), cacheControl);
+  if (path === "/matrix") return described(renderMatrix(await buildMatrix(env), authed));
 
   if (path === "/todos") {
     const url = new URL(req.url);
     const filter = url.searchParams.get("status") === "done" ? "done" : undefined;
     const [open, done] = await Promise.all([listTodos(env.DB, "open"), listTodos(env.DB, "done")]);
-    return htmlOk(renderTodos([...open, ...done], authed, filter), cacheControl);
+    return described(renderTodos([...open, ...done], authed, filter));
   }
 
-  if (path === "/posts") return htmlOk(renderPosts(await buildPostsWithMetrics(env), authed), cacheControl);
+  if (path === "/posts") return described(renderPosts(await buildPostsWithMetrics(env), authed));
 
-  if (path === "/impact") return htmlOk(renderImpact(await buildImpact(env), authed), cacheControl);
+  if (path === "/impact") return described(renderImpact(await buildImpact(env), authed));
 
   return null;
 }
