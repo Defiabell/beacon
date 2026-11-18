@@ -100,7 +100,9 @@ export const CONFIG: BeaconConfig = {
         "mythmesh.defiabell.com", "geshuo.defiabell.com", "shiling.defiabell.com", "gulliver.defiabell.com",
         "shotsync-demo.defiabell.com", "beacon.defiabell.com", "screen-coach.defiabell.com", "comments.defiabell.com",
         // Added 2026-10-29: the late-October launches (private repos, sites only).
-        "randeng.defiabell.com", "kaogu.defiabell.com", "lost.defiabell.com", "fanyi.defiabell.com", "shouye.defiabell.com"
+        "randeng.defiabell.com", "kaogu.defiabell.com", "lost.defiabell.com", "fanyi.defiabell.com", "shouye.defiabell.com",
+        // Added 2026-11-19: 离谱专利馆 (private repo Defiabell/zhuanli, Pages project zhuanli).
+        "zhuanli.defiabell.com"
       ]
     }
   ]
