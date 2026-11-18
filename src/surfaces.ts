@@ -78,6 +78,8 @@ export const SURFACES: Surface[] = [
     note: "自己发帖的地方。没有编辑推流，曝光靠帖子自身在社区里被顶起来。",
     hosts: [
       "v2ex.com",
+      // V2EX's own alternate domain (global.v2ex.co) — the same site.
+      "v2ex.co",
       "linux.do",
       "meta.appinn.net",
       "reddit.com",

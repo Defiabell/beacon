@@ -4,10 +4,10 @@ import { fetchRepoMeta, fetchRepoTraffic } from "./github";
 import { fetchPostMetrics } from "./posts";
 import { fetchSiteDaily } from "./goatcounter";
 import { fetchWorkerDaily } from "./cloudflare";
-import { fetchRumDaily, fetchRumReferrers } from "./rum";
+import { fetchRumDaily, fetchRumReferrers, zeroFillRows, DISCOVERED_LIVE_DAYS } from "./rum";
 import { fetchPagesFunctionsDaily, fetchPagesProjects, resolvePagesFunctionsToWorkerDaily } from "./pages";
 import { runAudit } from "../audit/run";
-import { CONFIG, siteHosts } from "../config";
+import { CONFIG } from "../config";
 import {
   upsertRepoDaily,
   replaceReferrerSnapshot,
@@ -17,6 +17,7 @@ import {
   upsertSiteDaily,
   upsertSiteReferrerDaily,
   upsertWorkerDaily,
+  listKnownSites,
   recordSourceRun
 } from "../db";
 
@@ -195,16 +196,11 @@ async function collectRum(env: Env, date: string, fetchFn: FetchFn): Promise<Sou
     dates[2],
     fetchFn
   );
-  const byKey = new Map(rows.map(row => [`${row.site}:${row.date}`, row]));
-  for (const site of CONFIG.sites) {
-    for (const host of siteHosts(site)) {
-      for (const day of dates) {
-        const key = `${host}:${day}`;
-        if (!byKey.has(key)) byKey.set(key, { site: host, date: day, pageviews: 0, visitors: 0 });
-      }
-    }
-  }
-  await upsertSiteDaily(env.DB, [...byKey.values()]);
+  // The query succeeded for these days, so a host with no row had no
+  // pageloads: store that as a zero (see zeroFillRows for which hosts count).
+  const liveSince = datesEndingOn(dates[0], DISCOVERED_LIVE_DAYS + 1)[0];
+  const zeros = zeroFillRows(rows, await listKnownSites(env.DB), CONFIG.sites, dates, liveSince);
+  await upsertSiteDaily(env.DB, [...rows, ...zeros]);
   // Second subrequest: the same days split by referring host, for the
   // site-side surface breakdown (src/surfaces.ts). Runs after the totals have
   // landed so a referrer-query failure costs the day's referrer rows, never

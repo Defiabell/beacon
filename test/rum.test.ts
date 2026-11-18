@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { env } from "cloudflare:test";
-import { buildQuery, normalizeRum, fetchRumDaily, buildReferrerQuery, normalizeRumReferrers, fetchRumReferrers } from "../src/collect/rum";
-import { upsertSiteDaily, getSiteTotals, upsertSiteReferrerDaily, getSiteReferrerTotals, getSiteReferrerDaily, getSiteReferrerSince } from "../src/db";
+import { buildQuery, normalizeRum, fetchRumDaily, buildReferrerQuery, normalizeRumReferrers, fetchRumReferrers, zeroFillRows } from "../src/collect/rum";
+import { listKnownSites, upsertSiteDaily, getSiteTotals, upsertSiteReferrerDaily, getSiteReferrerTotals, getSiteReferrerDaily, getSiteReferrerSince } from "../src/db";
 import { CONFIG, siteFor, siteHosts, type SiteConfig } from "../src/config";
+import { runDailyCollect } from "../src/collect/run";
 
 const SITES: SiteConfig[] = [
   { name: "博客", host: "defiabell.github.io", siteTag: "679daf9b94fa433aa14020d7a40caf1b" },
@@ -324,5 +325,95 @@ describe("site_referrer_daily storage", () => {
       "2026-03-01 chatgpt.com 1"
     ]);
     expect(await getSiteReferrerSince(env.DB)).toBe("2026-02-01");
+  });
+});
+
+describe("zeroFillRows", () => {
+  const sites = [SITES[0], ZONE];
+  const dates = ["2026-11-15", "2026-11-16", "2026-11-17"];
+  const LIVE_SINCE = "2026-10-15";
+  const zerosFor = (rows: { site: string; date: string }[], host: string) => rows.filter(r => r.site === host).map(r => r.date);
+
+  it("fills every configured host for every fetched day it has no row", () => {
+    const fetched = [{ site: "gulliver.defiabell.com", date: "2026-11-16", pageviews: 4, visitors: 4 }];
+    const zeros = zeroFillRows(fetched, [], sites, dates, LIVE_SINCE);
+    expect(zerosFor(zeros, "defiabell.github.io")).toEqual(dates);
+    expect(zerosFor(zeros, "defiabell.com")).toEqual(dates);
+    // The day that came back with traffic is never overwritten by a zero.
+    expect(zerosFor(zeros, "gulliver.defiabell.com")).toEqual(["2026-11-15", "2026-11-17"]);
+    expect(zeros.every(r => r.pageviews === 0 && r.visitors === 0)).toBe(true);
+  });
+
+  it("starts filling an unlisted zone subdomain once the zone has reported it, without a config change", () => {
+    const known = [{ site: "tingyu.defiabell.com", first: "2026-11-13", lastActive: "2026-11-14" }];
+    expect(zerosFor(zeroFillRows([], known, sites, dates, LIVE_SINCE), "tingyu.defiabell.com")).toEqual(dates);
+  });
+
+  it("does not fill days before a discovered host first appeared", () => {
+    // Seen for the first time in this very fetch, on the middle day.
+    const fetched = [{ site: "new.defiabell.com", date: "2026-11-16", pageviews: 9, visitors: 9 }];
+    expect(zerosFor(zeroFillRows(fetched, [], sites, dates, LIVE_SINCE), "new.defiabell.com")).toEqual(["2026-11-17"]);
+  });
+
+  it("stops filling a discovered host that has had no pageload inside the live window", () => {
+    const known = [
+      { site: "kaidan.defiabell.com", first: "2026-09-01", lastActive: "2026-10-14" },
+      { site: "never.defiabell.com", first: "2026-09-01", lastActive: null }
+    ];
+    const zeros = zeroFillRows([], known, sites, dates, LIVE_SINCE);
+    expect(zerosFor(zeros, "kaidan.defiabell.com")).toEqual([]);
+    expect(zerosFor(zeros, "never.defiabell.com")).toEqual([]);
+  });
+
+  it("a retired host that gets a pageload again is live again", () => {
+    const known = [{ site: "kaidan.defiabell.com", first: "2026-09-01", lastActive: "2026-10-14" }];
+    const fetched = [{ site: "kaidan.defiabell.com", date: "2026-11-15", pageviews: 1, visitors: 1 }];
+    expect(zerosFor(zeroFillRows(fetched, known, sites, dates, LIVE_SINCE), "kaidan.defiabell.com")).toEqual(["2026-11-16", "2026-11-17"]);
+  });
+
+  it("never invents rows for a host outside every configured site", () => {
+    const known = [{ site: "someone.pages.dev", first: "2026-11-01", lastActive: "2026-11-14" }];
+    expect(zerosFor(zeroFillRows([], known, sites, dates, LIVE_SINCE), "someone.pages.dev")).toEqual([]);
+  });
+});
+
+describe("listKnownSites", () => {
+  it("reports each host's first day and its last day with a pageload", async () => {
+    await upsertSiteDaily(env.DB, [
+      { site: "k.test", date: "2026-11-01", pageviews: 0, visitors: 0 },
+      { site: "k.test", date: "2026-11-03", pageviews: 5, visitors: 5 },
+      { site: "k.test", date: "2026-11-05", pageviews: 0, visitors: 0 },
+      { site: "z.test", date: "2026-11-02", pageviews: 0, visitors: 0 }
+    ]);
+    const known = await listKnownSites(env.DB);
+    expect(known.find(k => k.site === "k.test")).toEqual({ site: "k.test", first: "2026-11-01", lastActive: "2026-11-03" });
+    expect(known.find(k => k.site === "z.test")).toEqual({ site: "z.test", first: "2026-11-02", lastActive: null });
+  });
+});
+
+// The whole rum path with a stubbed Cloudflare: fetch -> zero-fill -> store.
+describe("rum collection end to end", () => {
+  const zoneIndex = CONFIG.sites.findIndex(s => s.host === "defiabell.com");
+  const respond = (zoneRows: unknown[]) => async () =>
+    Response.json({ data: { viewer: { accounts: [Object.fromEntries(CONFIG.sites.map((_, i) => [`s${i}`, i === zoneIndex ? zoneRows : []]))] } } });
+  const cf = { ...env, CLOUDFLARE_ACCOUNT_ID: "acc", CLOUDFLARE_API_TOKEN: "tok" };
+  const rowsFor = async (site: string) =>
+    (await env.DB.prepare(`SELECT date, pageviews FROM site_daily WHERE site=?1 ORDER BY date`).bind(site).all<{ date: string; pageviews: number }>()).results;
+
+  it("tracks a subdomain nobody configured from its first pageload, and records its quiet days as zeros", async () => {
+    // 11-18's run re-reads 11-15..11-17; the new host shows up on the 16th only.
+    const day = (date: string, requestHost: string, count: number) => ({ count, sum: { visits: count }, dimensions: { date, requestHost } });
+    const [report] = await runDailyCollect(cf, new Date("2026-11-18T01:20:00Z"), respond([day("2026-11-16", "brandnew.defiabell.com", 7)]), ["rum"]);
+    expect(report).toEqual({ source: "rum", ok: true });
+    expect(await rowsFor("brandnew.defiabell.com")).toEqual([
+      { date: "2026-11-16", pageviews: 7 },
+      { date: "2026-11-17", pageviews: 0 }
+    ]);
+    // A configured host with no traffic at all still gets its three zeros.
+    expect(await rowsFor("gulliver.defiabell.com")).toEqual(["2026-11-15", "2026-11-16", "2026-11-17"].map(date => ({ date, pageviews: 0 })));
+
+    // Next day, nothing comes back for it: the stored history is what keeps it tracked.
+    await runDailyCollect(cf, new Date("2026-11-19T01:20:00Z"), respond([]), ["rum"]);
+    expect((await rowsFor("brandnew.defiabell.com")).at(-1)).toEqual({ date: "2026-11-18", pageviews: 0 });
   });
 });

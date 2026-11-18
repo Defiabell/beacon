@@ -13,7 +13,18 @@ import type { Env, SourceRun, RepoDaily } from "../types";
 import { CONFIG, isZoneSite, siteFor, siteHosts } from "../config";
 import { classifyDay } from "../impact/classify";
 import { shiftDate } from "../impact/attribute";
-import { getRepoDailyRange, getSiteDailyRange, getStarHistoryFrom, getWorkerDailyRange, listSourceRuns } from "../db";
+import {
+  getRepoDailyRange,
+  getSiteDailyRange,
+  getSiteDailyForSite,
+  getSiteFirstDate,
+  getSiteReferrerDaily,
+  getSiteReferrerSince,
+  getStarHistoryFrom,
+  getWorkerDailyRange,
+  listSourceRuns
+} from "../db";
+import { SURFACES, classifyReferrer, type SurfaceId } from "../surfaces";
 
 export const TREND_WINDOWS = [7, 30, 90] as const;
 export type TrendWindow = (typeof TREND_WINDOWS)[number];
@@ -130,7 +141,7 @@ function siteLabel(host: string): string {
 // The total is null only on days when no repo at all was snapshotted (the
 // collector did not run), and before a repo's first snapshot it contributes
 // nothing rather than a guessed zero.
-function starTotals(byRepo: Map<string, { date: string; stars: number }[]>, dates: string[]): DaySeries {
+export function starTotals(byRepo: Map<string, { date: string; stars: number }[]>, dates: string[]): DaySeries {
   const snapshotDays = new Set<string>();
   for (const rows of byRepo.values()) for (const r of rows) snapshotDays.add(r.date);
   return dates.map(date => {
@@ -181,7 +192,7 @@ export async function buildTrends(env: Env, days: TrendWindow, today = new Date(
   const bySite = [...groupBy(inWindow(siteRows), r => r.site)]
     .map(([site, rows]) => {
       const values = onCalendar(rows, dates, r => r.pageviews);
-      return { key: site, label: siteLabel(site), values, visits: onCalendar(rows, dates, r => r.visitors), total: sum(values) };
+      return { key: site, label: siteLabel(site), href: `/s/${encodeURIComponent(site)}`, values, visits: onCalendar(rows, dates, r => r.visitors), total: sum(values) };
     })
     // A host that is neither configured nor carrying traffic is a stray row
     // (www redirecting to the apex, a typo'd subdomain) — not worth a chart.
@@ -240,6 +251,109 @@ export async function buildTrends(env: Env, days: TrendWindow, today = new Date(
       errors: onCalendar(workerRows, dates, r => r.errors),
       byScript
     },
+    sources
+  };
+}
+
+// ---- one site, day by day -----------------------------------------------------
+//
+// The question the fleet-wide page cannot answer: on the day a site spiked,
+// where did those people come from? Cloudflare's referrer rows are already
+// stored per (site, day, referrer); this lines them up against the same site's
+// daily pageviews.
+//
+// What it can and cannot show is stated on the page, not left implicit: a
+// referrer row exists only for a visit that arrived with a Referer header.
+// Arrivals from apps (微信, 小红书), typed-in addresses and privacy-stripped
+// links carry none, so "referred" is a floor on outside traffic, and the gap
+// between it and the day's pageviews is "direct or untraceable", not "nobody".
+
+export interface SiteReferrer {
+  referrer: string;
+  surface: SurfaceId | null;
+  surfaceName: string | null;
+  pageviews: number;
+  visits: number;
+}
+
+export interface SiteDetail {
+  host: string;
+  label: string;
+  days: TrendWindow;
+  dates: string[];
+  /** First day this host has any stored row. */
+  firstDate: string | null;
+  pageviews: TrendMetric;
+  visits: TrendMetric;
+  /** Pageviews that arrived with a referrer, per day; null before referrer collection started. */
+  referred: DaySeries;
+  /** Window totals per referrer, largest first. */
+  referrers: SiteReferrer[];
+  /** Per-day referrer rows, newest day first. */
+  referrerDaily: { date: string; referrer: string; pageviews: number; visits: number }[];
+  referrerSince: string | null;
+  sources: SourceRun[];
+}
+
+const HOSTNAME = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/;
+
+/** null when the host is neither configured nor has ever stored a row (caller answers 404). */
+export async function buildSiteDetail(
+  env: Env,
+  rawHost: string,
+  days: TrendWindow,
+  today = new Date().toISOString().slice(0, 10)
+): Promise<SiteDetail | null> {
+  const host = rawHost.toLowerCase();
+  if (!HOSTNAME.test(host)) return null;
+  const db = env.DB;
+  const dates = windowDates(today, days);
+  const prevDates = windowDates(shiftDate(today, -days), days);
+
+  const [rows, firstDate, referrerDaily, referrerSince, sources] = await Promise.all([
+    getSiteDailyForSite(db, host, prevDates[0], today),
+    getSiteFirstDate(db, host),
+    getSiteReferrerDaily(db, host, days, today),
+    getSiteReferrerSince(db),
+    listSourceRuns(db)
+  ]);
+  const configured = CONFIG.sites.flatMap(siteHosts).some(h => h.toLowerCase() === host);
+  if (!configured && firstDate === null) return null;
+
+  const pageviews = metric(rows, dates, prevDates, r => r.pageviews);
+  const totals = new Map<string, SiteReferrer>();
+  const referredByDate = new Map<string, number>();
+  for (const r of referrerDaily) {
+    const surface = classifyReferrer(r.referrer);
+    const prev = totals.get(r.referrer) ?? {
+      referrer: r.referrer,
+      surface,
+      surfaceName: SURFACES.find(s => s.id === surface)?.name ?? null,
+      pageviews: 0,
+      visits: 0
+    };
+    prev.pageviews += r.pageviews;
+    prev.visits += r.visits;
+    totals.set(r.referrer, prev);
+    referredByDate.set(r.date, (referredByDate.get(r.date) ?? 0) + r.pageviews);
+  }
+
+  return {
+    host,
+    label: siteLabel(host),
+    days,
+    dates,
+    firstDate,
+    pageviews,
+    visits: metric(rows, dates, prevDates, r => r.visitors),
+    // Unknown, not "0 referred", on a day nothing was being recorded: before
+    // the referrer collector's first day, or a day the site itself has no row.
+    referred: dates.map((d, i) =>
+      referrerSince === null || d < referrerSince || pageviews.values[i] === null ? null : referredByDate.get(d) ?? 0
+    ),
+    referrers: [...totals.values()].sort((a, b) => b.pageviews - a.pageviews || a.referrer.localeCompare(b.referrer)),
+    referrerDaily: referrerDaily.map(r => ({ date: r.date, referrer: r.referrer, pageviews: r.pageviews, visits: r.visits })),
+    referrerSince,
     sources
   };
 }

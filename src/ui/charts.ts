@@ -121,6 +121,8 @@ export interface DayChartOptions {
   mini?: boolean;
   /** Dated annotations (a post, a finished todo) drawn as a vertical rule. */
   markers?: ChartMarker[];
+  /** Extra readout lines for a day (e.g. that day's top referrers), keyed by date; one line each. No mark is drawn. */
+  notes?: Record<string, string[]>;
   ariaLabel?: string;
 }
 
@@ -187,6 +189,7 @@ export function dayChart(o: DayChartOptions): string {
         readoutRow(o.label, v) +
         (o.extra ?? []).map(x => readoutRow(x.label, x.values[i] ?? null)).join("") +
         events.map(e => `<span class="tip-ev">${esc(e)}</span>`).join("") +
+        (o.notes?.[date] ?? []).map((line, k) => `<span class="tip-note${k === 0 ? " first" : ""}">${esc(line)}</span>`).join("") +
         `</span>`;
       return `<span class="${cls}">${marker}${mark}${tip}</span>`;
     })
@@ -317,6 +320,8 @@ export interface StatTile {
   /** An absolute change, for a running total such as stars. */
   deltaAbs?: number | null;
   deltaNote?: string;
+  /** A plain line in the delta's place, for a tile whose figure has no "previous period". */
+  foot?: string;
   spark?: (number | null)[];
   /** Index where the current period starts in `spark`; earlier bars are the comparison period. */
   sparkAccentFrom?: number;
@@ -330,11 +335,22 @@ function deltaHtml(t: StatTile): string {
     const arrow = n > 0 ? "▲" : n < 0 ? "▼" : "→";
     return `<div class="t-delta ${dir}">${arrow} ${text}${note}</div>`;
   };
+  if (t.foot !== undefined) return `<div class="t-delta none">${esc(t.foot)}</div>`;
   if (t.deltaAbs !== undefined && t.deltaAbs !== null) return render(t.deltaAbs, fmtInt(Math.abs(t.deltaAbs)));
-  if (t.deltaPct !== undefined && t.deltaPct !== null) return render(t.deltaPct, `${Math.abs(Math.round(t.deltaPct))}%`);
+  if (t.deltaPct !== undefined && t.deltaPct !== null) return render(t.deltaPct, growthText(t.deltaPct));
   // No comparison available (the previous window is incomplete or empty): say
   // so rather than print a change computed from half a baseline.
   return `<div class="t-delta none">—${note ? ` ${note}` : ""}</div>`;
+}
+
+// A rise past +200% is stated as a multiple ("15.5 倍" for +1451%): against a
+// small baseline a four-digit percentage is true but reads as noise.
+export function growthText(pct: number): string {
+  if (pct >= 200) {
+    const times = 1 + pct / 100;
+    return `${times >= 100 ? Math.round(times) : Math.round(times * 10) / 10} 倍`;
+  }
+  return `${Math.abs(Math.round(pct))}%`;
 }
 
 export function statTile(t: StatTile): string {

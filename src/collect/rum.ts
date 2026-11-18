@@ -1,6 +1,6 @@
 import type { SiteDaily, SiteReferrerDaily } from "../types";
 import type { FetchFn } from "./github";
-import { isZoneSite, type SiteConfig } from "../config";
+import { isZoneSite, siteFor, siteHosts, type SiteConfig } from "../config";
 import { referrerLabel } from "../surfaces";
 
 // Daily pageviews per site from Cloudflare Web Analytics (RUM).
@@ -144,6 +144,82 @@ export async function fetchRumDaily(
     }
   }
   return normalizeRum(payload, sites);
+}
+
+// ---- zero-filling -------------------------------------------------------------
+//
+// RUM only returns a row for a host on a day it had at least one pageload, so
+// a quiet day leaves no row at all — and a day with no row is indistinguishable
+// from a day the collector never ran. Once the query for a day has succeeded,
+// "no row" for a host we know about is a real zero, and it is stored as one.
+//
+// Which hosts "we know about":
+//   - every configured host (SiteConfig.hosts / host), always;
+//   - any other subdomain of a zone-level site that the zone has already
+//     reported, from its first recorded day on. A new site under the zone
+//     starts being tracked the day it gets its first pageload, without anyone
+//     editing the config (the list was twelve sites behind by 2026-11).
+//
+// A discovered host stops being filled once it has gone DISCOVERED_LIVE_DAYS
+// without a single pageload: renamed, redirected and deleted subdomains
+// (kaidan → qiling, zhiyuan → fuxiao/3d) would otherwise collect a zero a day
+// forever. After that it has no rows again, which is what "not tracked" looks
+// like everywhere else.
+export const DISCOVERED_LIVE_DAYS = 30;
+
+export interface KnownSite {
+  site: string;
+  /** Earliest day with any row. */
+  first: string;
+  /** Latest day with at least one pageload; null if every stored row is zero. */
+  lastActive: string | null;
+}
+
+export function zeroFillRows(
+  fetched: SiteDaily[],
+  known: KnownSite[],
+  sites: SiteConfig[],
+  dates: string[],
+  liveSince: string
+): SiteDaily[] {
+  const have = new Set(fetched.map(r => `${r.site}:${r.date}`));
+  const out: SiteDaily[] = [];
+  const fill = (host: string, from: string) => {
+    for (const day of dates) {
+      if (day < from || have.has(`${host}:${day}`)) continue;
+      have.add(`${host}:${day}`);
+      out.push({ site: host, date: day, pageviews: 0, visitors: 0 });
+    }
+  };
+
+  const configured = new Set(sites.flatMap(siteHosts).map(h => h.toLowerCase()));
+  for (const host of configured) fill(host, "");
+
+  // First day and last active day per discovered host, from what is stored
+  // plus what this fetch just returned (a host seen for the first time today
+  // is filled from today, not from before it existed).
+  const seen = new Map<string, { first: string; lastActive: string | null }>();
+  const note = (site: string, date: string, active: boolean) => {
+    const prev = seen.get(site);
+    seen.set(site, {
+      first: prev && prev.first < date ? prev.first : date,
+      lastActive: active && (!prev?.lastActive || prev.lastActive < date) ? date : prev?.lastActive ?? null
+    });
+  };
+  for (const k of known) {
+    note(k.site, k.first, false);
+    if (k.lastActive) note(k.site, k.lastActive, true);
+  }
+  for (const r of fetched) note(r.site, r.date, r.pageviews > 0);
+
+  for (const [host, s] of seen) {
+    if (configured.has(host)) continue;
+    const cfg = siteFor(sites, host);
+    if (!cfg || !isZoneSite(cfg)) continue;
+    if (!s.lastActive || s.lastActive < liveSince) continue;
+    fill(host, s.first);
+  }
+  return out;
 }
 
 // ---- referrers --------------------------------------------------------------

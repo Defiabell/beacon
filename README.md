@@ -176,7 +176,8 @@ No token needed — these are public:
 
 - `GET /` `/p/:project` `/matrix` `/todos` `/posts` `/impact` — the HTML dashboard
 - `GET /trends?days=7|30|90` — every stored metric day by day: site pageviews and visits, repo views and clones, stars, Worker requests. Per-day column charts with a hover readout (CSS only, still no JavaScript), a small chart per site / repo / script, and the same numbers as a table. A day with no recorded row is drawn as a gap, never as zero
-- `GET /api/overview` `/api/trends?days=` `/api/matrix` `/api/posts` `/api/impact` `/api/health` `/api/todos?status=open|done` `/api/project/:name` — the same data as JSON
+- `GET /s/:host?days=7|30|90` — one site day by day, with where each day's visitors came from (Cloudflare referrers per day; the day's top referrers are in the bar's hover readout). A subdomain of a zone-level site is tracked from its first pageload on, without a config change, and its quiet days are stored as zeros
+- `GET /api/overview` `/api/trends?days=` `/api/site/:host?days=` `/api/matrix` `/api/posts` `/api/impact` `/api/health` `/api/todos?status=open|done` `/api/project/:name` — the same data as JSON
 
 ## Development
 

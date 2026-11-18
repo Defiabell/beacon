@@ -617,3 +617,29 @@ export async function getAllPeakReferrers(db: D1Database): Promise<(PeakReferrer
   ).all<PeakReferrer & { repo: string }>();
   return res.results;
 }
+
+// Every hostname site_daily has ever stored, with its first recorded day and
+// the last day it had a pageload. Feeds the RUM collector's zero-filling
+// (src/collect/rum.ts zeroFillRows).
+export async function listKnownSites(db: D1Database): Promise<{ site: string; first: string; lastActive: string | null }[]> {
+  const res = await db.prepare(
+    `SELECT site, MIN(date) AS first, MAX(CASE WHEN pageviews > 0 THEN date END) AS lastActive
+     FROM site_daily GROUP BY site`
+  ).all<{ site: string; first: string; lastActive: string | null }>();
+  return res.results;
+}
+
+// One site's daily rows over [from, to) — the site page's own series.
+export async function getSiteDailyForSite(db: D1Database, site: string, from: string, to: string): Promise<SiteDaily[]> {
+  const res = await db.prepare(
+    `SELECT site, date, pageviews, visitors FROM site_daily
+     WHERE site=?1 AND date >= ?2 AND date < ?3 ORDER BY date ASC`
+  ).bind(site, from, to).all<SiteDaily>();
+  return res.results;
+}
+
+// Earliest stored day for one site; null when the site has never had a row.
+export async function getSiteFirstDate(db: D1Database, site: string): Promise<string | null> {
+  const row = await db.prepare(`SELECT MIN(date) AS first FROM site_daily WHERE site=?1`).bind(site).first<{ first: string | null }>();
+  return row?.first ?? null;
+}

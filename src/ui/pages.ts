@@ -9,7 +9,7 @@ import type { MetricCoverage } from "../metrics";
 // deliberate deviations where the data available from src/api/public.ts
 // doesn't (yet) carry what the mockup shows.
 import type { Overview, OverviewTrend, ProjectDetail, ProjectSiteReferrals, MatrixData, MatrixChannel, MatrixCoverageRow, MatrixEffect, ReferredTraffic, PostWithMetrics, ProjectSummary, SiteRow, SurfaceBreakdown, WorkerTotal } from "../api/public";
-import { TREND_WINDOWS, type TrendsData, type TrendGroup, type DaySeries } from "../api/trends";
+import { TREND_WINDOWS, type TrendsData, type TrendGroup, type DaySeries, type SiteDetail } from "../api/trends";
 import type { ChannelKind } from "../channels";
 import type { Todo, SourceRun, ReferrerRow, CheckResult, Platform } from "../types";
 import type { EventImpact, EventAttribution, ImpactWindow } from "../impact/attribute";
@@ -119,7 +119,16 @@ function freshnessBar(allSources: SourceRun[]): string {
     return `<p class="fresh"><span class="dot"></span>暂无数据更新记录</p>`;
   }
   const latest = sources.reduce((a, b) => (a.lastRunAt > b.lastRunAt ? a : b));
-  const parts = sources.map(s => `${esc(SOURCE_NAMES[s.source] ?? s.source)} ${s.error === "not configured" || s.error === "no sites configured" ? "未配置" : s.ok ? "✓" : "✗"}`).join(" · ");
+  // A source nobody set up is not a status worth a permanent slot in this bar
+  // (GoatCounter has read "未配置" since launch); /api/health still lists it.
+  // A failed one carries its error as a tooltip, so "✗" is not a dead end.
+  const parts = sources
+    .filter(s => s.error !== "not configured" && s.error !== "no sites configured")
+    .map(s => {
+      const name = esc(SOURCE_NAMES[s.source] ?? s.source);
+      return s.ok ? `${name} ✓` : `<span title="${esc(s.error ?? "")}">${name} ✗</span>`;
+    })
+    .join(" · ");
   return `<p class="fresh"><span class="dot"></span>数据更新于 ${esc(fmtDateTime(latest.lastRunAt))} · ${parts}</p>`;
 }
 
@@ -288,7 +297,7 @@ function sitesSection(sites: SiteRow[]): string {
       : `<span class="chip" title="来自 AI 答案引擎（ChatGPT、Perplexity、Claude、Gemini、Copilot……）的页面浏览，7 天">AI 引荐 ${s.aiPageviews7d}</span>`;
     const host = label === s.site ? "" : `<span class="src">${esc(s.site)}</span>`;
     return {
-      nameHtml: `<span title="${esc(cfg && isZoneSite(cfg) ? cfg.name : s.site)}">${esc(label)}</span>`,
+      nameHtml: `<a href="/s/${encodeURIComponent(s.site)}" title="${esc(cfg && isZoneSite(cfg) ? cfg.name : s.site)}">${esc(label)}</a>`,
       value: s.pageviews,
       valueText: `${fmtCount(s.pageviews)} 次浏览 / ${fmtCount(s.visitors)} 次访问`,
       dim: !s.pageviews,
@@ -392,7 +401,7 @@ function overviewTiles(t: OverviewTrend | undefined): string {
     traffic("globe", "网站浏览", t.sitePageviews) +
     traffic("users", "网站访问", t.siteVisits) +
     traffic("eye", "仓库浏览", t.repoViews) +
-    statTile({ icon: "star", label: "Star 总数", period: "全部仓库", value: t.stars, deltaAbs: t.starsDelta7d, deltaNote: "近 7 天", href: "/trends" }) +
+    statTile({ icon: "star", label: "Star 总数", period: "全部仓库", value: t.stars, deltaAbs: t.starsDelta7d, deltaNote: "近 7 天", spark: t.starsGained, sparkAccentFrom: half, href: "/trends" }) +
     traffic("server", "服务请求", t.workerRequests)
   }</div>`;
 }
@@ -468,7 +477,7 @@ function siteReferralsCard(r: ProjectSiteReferrals | null | undefined): string {
     ? `<p class="sub">未归类：${r.surfaces.unclassified.slice(0, 8).map(u => `${esc(u.referrer)} ${u.views}`).join(" · ")}</p>`
     : "";
   return `<div class="card">
-<h2>站点引荐 · ${esc(r.host)}</h2>
+<h2>站点引荐 · ${esc(r.host)}<a class="more" href="/s/${encodeURIComponent(r.host)}">逐日详情 →</a></h2>
 <p class="sub">Cloudflare Web Analytics 引荐来源，最近 ${r.windowDays} 个完整 UTC 日（浏览 / 访问）。</p>
 <ul class="plain">${rows}</ul>
 ${unknown}
@@ -1203,4 +1212,110 @@ ${smallMultiples(t.workers.byScript, dates, "请求", "请求")}
 ${dailyTable(t)}
 </main>`;
   return page("beacon · 趋势", body);
+}
+
+// ---- one site --------------------------------------------------------------
+
+const REFERRER_ROWS_LIMIT = 15;
+const REFERRER_DAILY_ROWS_LIMIT = 150;
+const TIP_REFERRERS = 3;
+
+export function renderSite(d: SiteDetail, authed: boolean): string {
+  const { dates } = d;
+  const period = `近 ${d.days} 天`;
+  const pv = sumOrNull(d.pageviews.values);
+  const visits = sumOrNull(d.visits.values);
+  const referred = sumOrNull(d.referred);
+
+  // Each day's largest referrers ride in that day's hover readout, so the
+  // answer to "where did this spike come from" is on the bar itself.
+  const byDay = new Map<string, { referrer: string; pageviews: number }[]>();
+  for (const r of d.referrerDaily) byDay.set(r.date, [...(byDay.get(r.date) ?? []), r]);
+  const notes: Record<string, string[]> = {};
+  for (const [date, rows] of byDay) {
+    const top = [...rows].sort((a, b) => b.pageviews - a.pageviews);
+    notes[date] = [
+      ...top.slice(0, TIP_REFERRERS).map(r => `${r.referrer} ${fmtInt(r.pageviews)}`),
+      ...(top.length > TIP_REFERRERS ? [`另有 ${top.length - TIP_REFERRERS} 个来源`] : [])
+    ];
+  }
+
+  const chart = dayChart({
+    dates,
+    values: d.pageviews.values,
+    label: "浏览",
+    extra: [
+      { label: "访问", values: d.visits.values },
+      { label: "带来源的浏览", values: d.referred }
+    ],
+    notes,
+    height: 200
+  });
+
+  const referrerRows: RankRow[] = d.referrers.slice(0, REFERRER_ROWS_LIMIT).map(r => ({
+    nameHtml: esc(r.referrer),
+    tagsHtml: `<span class="src">${esc(r.surfaceName ?? "未归类")}</span>`,
+    value: r.pageviews,
+    valueText: `${fmtInt(r.pageviews)} / ${fmtInt(r.visits)}`
+  }));
+  const moreReferrers = d.referrers.length > REFERRER_ROWS_LIMIT ? `<p class="rest">另有 ${d.referrers.length - REFERRER_ROWS_LIMIT} 个来源，合计 ${fmtInt(d.referrers.slice(REFERRER_ROWS_LIMIT).reduce((n, r) => n + r.pageviews, 0))} 次浏览。</p>` : "";
+
+  const since = d.referrerSince ? `来源自 ${esc(d.referrerSince)} 起采集，更早的日子没有来源记录。` : "来源采集尚未运行。";
+  const share = pv && referred !== null ? `占 ${Math.round((referred / pv) * 100)}%` : "";
+
+  const dailyReferrers = d.referrerDaily.slice(0, REFERRER_DAILY_ROWS_LIMIT);
+  const referrerTable = dailyReferrers.length
+    ? `<div class="scroll"><table class="daily"><tr><th>日期（UTC）</th><th>来源</th><th class="num">浏览</th><th class="num">访问</th></tr>` +
+      dailyReferrers.map(r => `<tr><td>${esc(fmtDay(r.date))}</td><td>${esc(r.referrer)}</td><td class="num">${fmtInt(r.pageviews)}</td><td class="num">${fmtInt(r.visits)}</td></tr>`).join("") +
+      `</table></div>` +
+      (d.referrerDaily.length > REFERRER_DAILY_ROWS_LIMIT ? `<p class="rest">只列出最近 ${REFERRER_DAILY_ROWS_LIMIT} 行，共 ${d.referrerDaily.length} 行；完整数据见 /api/site/${esc(d.host)}?days=${d.days}。</p>` : "")
+    : `<p class="sub">这段时间没有带来源的访问。</p>`;
+
+  const cell = (v: number | null) => (v === null ? `<td class="num none">—</td>` : `<td class="num">${fmtInt(v)}</td>`);
+  const dayRows = dates
+    .map((date, i) => `<tr><td>${esc(fmtDay(date))}</td>${cell(d.pageviews.values[i])}${cell(d.visits.values[i])}${cell(d.referred[i])}</tr>`)
+    .reverse()
+    .join("");
+
+  const filter = `<div class="filters">${TREND_WINDOWS.map(
+    n => `<a class="filter${n === d.days ? " on" : ""}" href="/s/${encodeURIComponent(d.host)}?days=${n}">近 ${n} 天</a>`
+  ).join("")}</div>`;
+  const header = `<header>${LOGO}<nav><a href="/trends?days=${d.days}">← 返回趋势</a>${authLink(authed)}</nav></header>`;
+
+  const body = `${header}
+<main>
+<p class="crumb">趋势 / 站点</p>
+<h1>${esc(d.label)}</h1>
+<p class="meta"><a href="https://${esc(d.host)}/" target="_blank" rel="noopener">${esc(d.host)} ↗</a>${d.firstDate ? ` · 自 ${esc(d.firstDate)} 起有记录` : " · 还没有任何记录"}</p>
+${filter}
+<div class="tiles">${
+    statTile({ icon: "globe", label: "浏览", period, value: pv, deltaPct: windowDeltaPct(d.pageviews.values, d.pageviews.previous), deltaNote: `较前 ${d.days} 天` }) +
+    statTile({ icon: "users", label: "访问", period, value: visits, deltaPct: windowDeltaPct(d.visits.values, d.visits.previous), deltaNote: `较前 ${d.days} 天` }) +
+    statTile({ icon: "compass", label: "带来源的浏览", period, value: referred, foot: share || "—" })
+  }</div>
+<section class="card">
+<h2>${icon("globe")}每天的浏览</h2>
+<p class="sub">柱是当天页面浏览；悬停看当天的访问数、带来源的浏览，以及当天最大的几个来源。</p>
+${chartOrEmpty(chart, "这段时间没有访问记录。")}
+${chartNotes(dates, [d.pageviews.values])}
+</section>
+<div class="cols">
+<section class="card">
+<h2>${icon("compass")}来源 · ${d.days} 天合计</h2>
+<p class="sub">浏览 / 访问。只统计带 Referer 点进来的访问——从微信、小红书等 App 内打开、直接输入网址、或链接去掉了来源的访问都不带，所以这里是外部流量的下限，其余部分是「直接访问或无法追踪」，不是「没人来」。${since}</p>
+${referrerRows.length ? rankList(referrerRows, { valueWidth: 88 }) + moreReferrers : `<p class="sub">这段时间没有带来源的访问。</p>`}
+</section>
+<section class="card">
+<h2>${icon("table")}逐日明细</h2>
+<p class="sub">「—」是当天无记录，不是 0。</p>
+<div class="scroll"><table class="daily"><tr><th>日期（UTC）</th><th class="num">浏览</th><th class="num">访问</th><th class="num">带来源</th></tr>${dayRows}</table></div>
+</section>
+</div>
+<details class="card tbl"${d.days <= 30 ? " open" : ""}>
+<summary><h2 style="display:inline-flex">${icon("table")}来源 · 按天</h2></summary>
+<p class="sub">哪一天、从哪里、来了多少，最新在上。</p>
+${referrerTable}
+</details>
+</main>`;
+  return page(`beacon · ${d.label}`, body);
 }

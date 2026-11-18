@@ -267,6 +267,8 @@ a.tile:hover { border-color: var(--series-1); }
 .tip-row { display: flex; align-items: baseline; gap: 6px; }
 .tip-row b { font-weight: 650; font-variant-numeric: tabular-nums; min-width: 2ch; }
 .tip-ev { max-width: 240px; white-space: normal; padding-top: 3px; margin-top: 2px; border-top: 1px solid color-mix(in srgb, var(--page) 25%, transparent); }
+.tip-note { opacity: .85; }
+.tip-note.first { padding-top: 3px; margin-top: 2px; border-top: 1px solid color-mix(in srgb, var(--page) 25%, transparent); }
 .xax { grid-column: 2; display: flex; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .xax span { flex: 1 1 0; min-width: 0; display: flex; justify-content: center; white-space: nowrap; }
 /* The last day's label ends at the plot's right edge instead of overhanging it. */
@@ -319,7 +321,10 @@ table.daily td.none { color: var(--muted); }
 
 @media (max-width: 720px) {
   header { padding: 8px 16px; }
-  header nav { margin-left: 0; flex: 0 0 100%; }
+  /* Wraps onto a second row rather than scrolling sideways, which hid the last
+     two links off-screen with no hint they were there. */
+  header nav { margin-left: 0; flex: 0 0 100%; flex-wrap: wrap; overflow-x: visible; }
+  header nav a, header nav button.navlink { padding: 5px 8px; }
   main { padding: 16px 16px 40px; }
   .cols { grid-template-columns: 1fr; }
   .two { grid-template-columns: 1fr; }

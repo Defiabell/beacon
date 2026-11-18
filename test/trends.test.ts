@@ -2,10 +2,10 @@ import { describe, it, expect } from "vitest";
 import { env, SELF } from "cloudflare:test";
 import * as db from "../src/db";
 import { CONFIG } from "../src/config";
-import { buildTrends, parseTrendWindow, windowDates } from "../src/api/trends";
+import { buildTrends, buildSiteDetail, parseTrendWindow, windowDates } from "../src/api/trends";
 import { buildOverview, type Overview } from "../src/api/public";
-import { dayChart, niceTicks, windowDeltaPct } from "../src/ui/charts";
-import { renderOverview, renderTrends } from "../src/ui/pages";
+import { dayChart, growthText, niceTicks, windowDeltaPct } from "../src/ui/charts";
+import { renderOverview, renderSite, renderTrends } from "../src/ui/pages";
 import type { MetricCoverage } from "../src/metrics";
 
 // A fixed "today" far from every other fixture, so the windows below contain
@@ -273,5 +273,110 @@ describe("/trends", () => {
     }, false);
     expect(html).toContain("这段时间没有任何站点访问记录。");
     expect(html).not.toContain('class="chart ');
+  });
+});
+
+describe("growthText", () => {
+  it("states a large rise as a multiple instead of a four-digit percentage", () => {
+    expect(growthText(57)).toBe("57%");
+    expect(growthText(-66)).toBe("66%");
+    expect(growthText(199)).toBe("199%");
+    expect(growthText(200)).toBe("3 倍");
+    expect(growthText(1451)).toBe("15.5 倍");
+    expect(growthText(20000)).toBe("201 倍");
+  });
+});
+
+describe("renderOverview: freshness bar", () => {
+  const base: Overview = {
+    projects: [], topTodos: [], suggestions: [], sitePv7d: 0,
+    surfaces: { surfaces: [], unclassified: [], since: null }, workers: [], sites: [],
+    sources: [
+      { source: "rum", lastRunAt: "2027-03-10 01:20:00", ok: true, error: null },
+      { source: "goatcounter", lastRunAt: "2027-03-10 01:20:00", ok: true, error: "not configured" },
+      { source: "posts", lastRunAt: "2027-03-10 01:10:00", ok: false, error: 'v2ex -> 403 "limited"' }
+    ]
+  };
+
+  it("leaves out a source nobody configured, and puts a failed source's error on its mark", () => {
+    const bar = renderOverview(base, false).match(/<p class="fresh">.*?<\/p>/s)![0];
+    expect(bar).toContain("rum ✓");
+    expect(bar).not.toContain("GoatCounter");
+    expect(bar).toContain('<span title="v2ex -&gt; 403 &quot;limited&quot;">帖子 ✗</span>');
+  });
+});
+
+describe("buildOverview: stars gained per day", () => {
+  it("measures each day against the nearest earlier snapshot, and leaves an unsnapshotted day unknown", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    const [d1, d2, d3] = windowDates(today, 3);
+    await db.upsertStarHistory(env.DB, A.repo, [{ date: d1, stars: 10 }, { date: d3, stars: 12 }]);
+    const o = await buildOverview(env);
+    expect(o.trend!.dates.slice(-3)).toEqual([d1, d2, d3]);
+    expect(o.trend!.starsGained!.slice(-2)).toEqual([null, 2]);
+  });
+});
+
+describe("site page", () => {
+  const seed = async () => {
+    await db.upsertSiteDaily(env.DB, [
+      { site: "spike.test", date: "2027-03-08", pageviews: 100, visitors: 60 },
+      { site: "spike.test", date: "2027-03-09", pageviews: 4, visitors: 4 }
+    ]);
+    await db.upsertSiteReferrerDaily(env.DB, [
+      { site: "spike.test", date: "2027-03-08", referrer: "www.v2ex.com", pageviews: 30, visits: 30 },
+      { site: "spike.test", date: "2027-03-08", referrer: "global.v2ex.co", pageviews: 5, visits: 5 },
+      { site: "spike.test", date: "2027-03-08", referrer: "unknown.example", pageviews: 2, visits: 1 },
+      // A referrer row on a day the site itself has no row: not a "0 pageviews, 9 referred" day.
+      { site: "spike.test", date: "2027-03-05", referrer: "www.v2ex.com", pageviews: 9, visits: 9 }
+    ]);
+  };
+
+  it("lines each day's pageviews up with where they came from", async () => {
+    await seed();
+    const d = (await buildSiteDetail(env, "Spike.Test", 7, TODAY))!;
+    expect(d.host).toBe("spike.test");
+    expect(d.firstDate).toBe("2027-03-08");
+    expect(d.pageviews.values).toEqual([null, null, null, null, null, 100, 4]);
+    // 03-05 has referrer rows but no site row; 03-09 is recorded with nothing referred.
+    expect(d.referred).toEqual([null, null, null, null, null, 37, 0]);
+    expect(d.referrers.map(r => [r.referrer, r.pageviews, r.surface])).toEqual([
+      ["www.v2ex.com", 39, "community"],
+      ["global.v2ex.co", 5, "community"],
+      ["unknown.example", 2, null]
+    ]);
+  });
+
+  it("is a 404 for a host that is neither configured nor ever recorded, and for anything that is not a hostname", async () => {
+    expect(await buildSiteDetail(env, "never-seen.example", 7, TODAY)).toBeNull();
+    expect(await buildSiteDetail(env, "a b<script>", 7, TODAY)).toBeNull();
+    const res = await SELF.fetch("https://beacon.internal/s/never-seen.example");
+    expect(res.status).toBe(404);
+  });
+
+  it("still renders a configured host that has no rows yet", async () => {
+    const host = CONFIG.sites[0].host;
+    const d = (await buildSiteDetail(env, host, 7, TODAY))!;
+    expect(d.firstDate).toBeNull();
+    expect(renderSite(d, false)).toContain("这段时间没有访问记录。");
+  });
+
+  it("puts the day's top referrers in that day's hover readout, escaped", async () => {
+    await seed();
+    await db.upsertSiteReferrerDaily(env.DB, [{ site: "spike.test", date: "2027-03-08", referrer: "<b>x</b>.example", pageviews: 50, visits: 50 }]);
+    const html = renderSite((await buildSiteDetail(env, "spike.test", 7, TODAY))!, false);
+    expect(html).toContain('<span class="tip-note first">&lt;b&gt;x&lt;/b&gt;.example 50</span><span class="tip-note">www.v2ex.com 30</span>');
+    expect(html).toContain('<span class="tip-note">另有 1 个来源</span>');
+    expect(html).not.toContain("<b>x</b>");
+  });
+
+  it("GET /s/:host and /api/site/:host serve a recorded site", async () => {
+    const yesterday = windowDates(new Date().toISOString().slice(0, 10), 1)[0];
+    await db.upsertSiteDaily(env.DB, [{ site: "live.test", date: yesterday, pageviews: 3, visitors: 2 }]);
+    const page = await SELF.fetch("https://beacon.internal/s/live.test?days=7");
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain('<a class="filter on" href="/s/live.test?days=7">近 7 天</a>');
+    const api = await SELF.fetch("https://beacon.internal/api/site/live.test?days=7");
+    expect((await api.json<{ pageviews: { values: (number | null)[] } }>()).pageviews.values.at(-1)).toBe(3);
   });
 });

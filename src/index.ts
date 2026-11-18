@@ -6,8 +6,8 @@ import { handleUi } from "./api/ui";
 import { handleSession } from "./api/session";
 import { handlePublicApi, buildOverview, buildProjectDetail, buildMatrix, buildPostsWithMetrics, buildImpact } from "./api/public";
 import { listTodos } from "./db";
-import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderImpact, renderTrends } from "./ui/pages";
-import { buildTrends, parseTrendWindow } from "./api/trends";
+import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderImpact, renderTrends, renderSite } from "./ui/pages";
+import { buildTrends, buildSiteDetail, parseTrendWindow } from "./api/trends";
 import { isAuthed, hasAdminCredential } from "./auth";
 
 const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
@@ -40,6 +40,7 @@ function serverError(): Response {
 }
 
 const PROJECT_PAGE_PATH = /^\/p\/([^/]+)$/;
+const SITE_PAGE_PATH = /^\/s\/([^/]+)$/;
 
 // Decodes a %-encoded project-name path segment, mapping malformed encoding
 // (e.g. "%zz", which makes decodeURIComponent throw) to null rather than
@@ -76,6 +77,15 @@ async function routePage(req: Request, env: Env, path: string): Promise<Response
   if (path === "/trends") {
     const days = parseTrendWindow(new URL(req.url).searchParams.get("days"));
     return htmlOk(renderTrends(await buildTrends(env, days), authed), cacheControl);
+  }
+
+  const siteMatch = path.match(SITE_PAGE_PATH);
+  if (siteMatch) {
+    const host = decodeSegment(siteMatch[1]);
+    if (host === null) return notFound();
+    const detail = await buildSiteDetail(env, host, parseTrendWindow(new URL(req.url).searchParams.get("days")));
+    if (!detail) return notFound();
+    return htmlOk(renderSite(detail, authed), cacheControl);
   }
 
   if (path === "/matrix") return htmlOk(renderMatrix(await buildMatrix(env), authed), cacheControl);

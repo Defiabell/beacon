@@ -54,7 +54,7 @@ import {
   type ImpactStatus,
   type TodoEventInput
 } from "../impact/attribute";
-import { buildTrends, parseTrendWindow, windowDates, type DaySeries } from "./trends";
+import { buildTrends, buildSiteDetail, parseTrendWindow, starTotals, windowDates, type DaySeries } from "./trends";
 
 const REPO_SERIES_SUMMARY_DAYS = 14;
 // How many days of daily values ride along with the overview's totals, for the
@@ -134,6 +134,9 @@ export interface OverviewTrend {
   workerRequests: DaySeries;
   stars: number | null;
   starsDelta7d: number | null;
+  // Stars gained per day across the fleet (each day against the nearest
+  // earlier snapshot day). Optional: literals written before it still typecheck.
+  starsGained?: DaySeries;
 }
 
 export interface Overview {
@@ -395,7 +398,9 @@ function groupRows<T>(rows: T[], key: (row: T) => string): Map<string, T[]> {
 // project. With ten projects the per-project form alone was 30 of the 50 D1
 // queries a free-plan invocation is allowed, and the overview as a whole sat at
 // 49 — one more project and the page would have started failing.
-async function fetchProjectSummaries(db: D1Database, allPosts: Post[], today: string, sources: SourceRun[]): Promise<ProjectSummary[]> {
+async function fetchProjectSummaries(
+  db: D1Database, allPosts: Post[], today: string, sources: SourceRun[]
+): Promise<{ projects: ProjectSummary[]; starsByRepo: Map<string, { date: string; stars: number }[]> }> {
   const [starRows, repoRows, referrerRows] = await Promise.all([
     getStarHistoryFrom(db, ""),
     getRepoDailyRange(db, shiftDate(today, -REPO_SERIES_SUMMARY_DAYS), today),
@@ -404,7 +409,7 @@ async function fetchProjectSummaries(db: D1Database, allPosts: Post[], today: st
   const starsByRepo = groupRows(starRows, r => r.repo);
   const repoByRepo = groupRows(repoRows, r => r.repo);
   const referrersByRepo = groupRows(referrerRows, r => r.repo);
-  return CONFIG.projects.map(project =>
+  const projects = CONFIG.projects.map(project =>
     computeProjectSummary(
       project,
       (starsByRepo.get(project.repo) ?? []).map(r => ({ date: r.date, stars: r.stars })),
@@ -415,6 +420,23 @@ async function fetchProjectSummaries(db: D1Database, allPosts: Post[], today: st
       sources.find(s => s.source === `github:${project.repo}`)
     )
   );
+  const fleet = new Set(CONFIG.projects.map(p => p.repo));
+  return { projects, starsByRepo: new Map([...starsByRepo].filter(([repo]) => fleet.has(repo))) };
+}
+
+// Day-over-day change of a running total, each day against the nearest
+// earlier day that has a value (a missed snapshot must not read as a jump on
+// the next day, nor as a zero on its own). `totals` carries one extra leading
+// day so the first slot of the result has something to be compared with.
+function dailyGains(totals: DaySeries): DaySeries {
+  return totals.slice(1).map((value, i) => {
+    if (value === null) return null;
+    for (let j = i; j >= 0; j--) {
+      const prev = totals[j];
+      if (prev !== null) return value - prev;
+    }
+    return null;
+  });
 }
 
 // listProjectChannels also carries postId, which the public coverage/matrix
@@ -567,7 +589,7 @@ export async function buildOverview(env: Env): Promise<Overview> {
     listSourceRuns(db),
     getTopOpenTodos(db, TOP_TODOS_LIMIT)
   ]);
-  const projects = await fetchProjectSummaries(db, allPosts, today, sources);
+  const { projects, starsByRepo } = await fetchProjectSummaries(db, allPosts, today, sources);
 
   // Peaks are read before the suggestions, not after: the ranking now needs
   // them (proven referral outranks tag fit — see suggestPairs).
@@ -623,7 +645,8 @@ export async function buildOverview(env: Env): Promise<Overview> {
       repoViews: trendDates.map((_, i) => sumKnown(projects.map(p => p.viewsSeries?.[i] ?? null))),
       workerRequests: calendarSeries(workerDaily, trendDates, r => r.requests),
       stars: sumKnown(projects.map(p => p.stars)),
-      starsDelta7d: sumKnown(projects.map(p => p.starsDelta7d))
+      starsDelta7d: sumKnown(projects.map(p => p.starsDelta7d)),
+      starsGained: dailyGains(starTotals(starsByRepo, windowDates(today, OVERVIEW_TREND_DAYS + 1)))
     }
   };
 }
@@ -906,6 +929,7 @@ function jsonError(body: unknown, status: number): Response {
 }
 
 const PROJECT_PATH = /^\/api\/project\/([^/]+)$/;
+const SITE_PATH = /^\/api\/site\/([^/]+)$/;
 
 // `path` is the request's URL.pathname, matched together with req.method —
 // mirrors handleAdmin's (src/api/admin.ts) contract.
@@ -936,6 +960,19 @@ export async function handlePublicApi(req: Request, env: Env, path: string): Pro
     const url = new URL(req.url);
     const status = url.searchParams.get("status") === "done" ? "done" : "open";
     return jsonOk(await listTodos(env.DB, status));
+  }
+
+  const siteMatch = path.match(SITE_PATH);
+  if (siteMatch) {
+    let host: string;
+    try {
+      host = decodeURIComponent(siteMatch[1]);
+    } catch {
+      return jsonError({ error: "not found" }, 404);
+    }
+    const detail = await buildSiteDetail(env, host, parseTrendWindow(new URL(req.url).searchParams.get("days")));
+    if (!detail) return jsonError({ error: "not found" }, 404);
+    return jsonOk(detail);
   }
 
   const projectMatch = path.match(PROJECT_PATH);
