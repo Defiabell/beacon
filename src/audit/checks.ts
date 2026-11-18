@@ -209,7 +209,7 @@ function wellKnownFileProblem(name: string, f: WellKnownFile): string | null {
   return null;
 }
 
-function checkWellKnown(input: RepoAuditInput): CheckResult {
+export function checkWellKnown(input: RepoAuditInput): CheckResult {
   const probe = input.wellKnown;
   if (!probe) {
     return { checkId: "well-known", status: "na", priority: 2, detail: "no checkable homepage for this project" };

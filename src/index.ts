@@ -8,6 +8,7 @@ import { handlePublicApi, buildOverview, buildProjectDetail, buildMatrix, buildP
 import { listTodos } from "./db";
 import { renderOverview, renderProject, renderMatrix, renderTodos, renderPosts, renderImpact, renderTrends, renderSite } from "./ui/pages";
 import { buildTrends, buildSiteDetail, parseTrendWindow } from "./api/trends";
+import { handleWellKnown } from "./api/wellknown";
 import { isAuthed, hasAdminCredential } from "./auth";
 
 const PUBLIC_CACHE_CONTROL = "public, max-age=60, s-maxage=600";
@@ -158,7 +159,7 @@ export default {
       else if (path.startsWith("/ui/")) res = await handleUi(req, env, path);
       else if (path === "/login" || path === "/logout") res = (await handleSession(req, env, path)) ?? notFound();
       else if (path.startsWith("/api/")) res = (await handlePublicApi(req, env, path)) ?? notFound();
-      else res = (await routePage(req, env, path)) ?? notFound();
+      else res = (await handleWellKnown(req, env, path)) ?? (await routePage(req, env, path)) ?? notFound();
 
       // Exactly the paths that would otherwise have been publicly cacheable
       // get their Cache-Control overridden to private/no-store here when an
