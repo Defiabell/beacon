@@ -104,7 +104,9 @@ export const CONFIG: BeaconConfig = {
         // Added 2026-11-19: 离谱专利馆 (private repo Defiabell/zhuanli, Pages project zhuanli).
         "zhuanli.defiabell.com",
         // Added 2026-11-19: 烟花 (private repo Defiabell/yanhua, Pages project yanhua).
-        "yanhua.defiabell.com"
+        "yanhua.defiabell.com",
+        // Added 2026-11-19: 一堆火 (private repo Defiabell/huo, Pages project huo; was demo-fire.pages.dev).
+        "huo.defiabell.com"
       ]
     }
   ]
