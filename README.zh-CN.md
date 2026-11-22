@@ -12,6 +12,7 @@ beacon 是一个 **Cloudflare Worker + D1 数据库**，围绕三层结构组织
 
 - **Measure（度量）** —— 每日定时任务（UTC 01:00 采 GitHub、01:10 采帖子、01:20 采网站统计，见 `wrangler.toml`）拉取每个被跟踪仓库的 GitHub 流量/clone/star 历史（`src/collect/github.ts`），刷新你在 V2EX / LinuxDO / Hacker News / Reddit 上登记过的每篇帖子的指标（`src/collect/posts.ts`），读取本 Cloudflare 账户下每个 Worker（`src/collect/cloudflare.ts`）和每个 Pages 项目 Functions（`src/collect/pages.ts`——单独一个 GraphQL 数据集加一次 REST 项目查询，因为 Pages Functions 的流量对 Worker 那个数据集完全不可见）各自的请求量，拉取 `src/config.ts` 里配置站点的 RUM 浏览量**和按引荐来源拆分的页面加载数**（`src/collect/rum.ts`——有了引荐拆分，AI 答案引擎带来的访问才量得到，见下），以及可选的 GoatCounter 站点每日 pageview（`src/collect/goatcounter.ts`）。
 - **Discover（发现）** —— 仓库曝光审计引擎（`src/audit/checks.ts`）对每个被跟踪仓库跑 10 项检查（description 长度、≥3 个 topics、是否有 LICENSE、README 是否有英文简介、README 是否有截图/GIF、macOS 项目是否挂了 release 产物、README 有无断链、是否设置了自定义 social preview 图、homepage 是否与配置同步，以及首页是 HTML 页面的项目（纯 API Worker 的根路径判 n/a）`/robots.txt`、robots 里声明的 sitemap 和 `/llms.txt` 是否是真文件——返回 2xx 但 content-type 是 `text/html`，就是 SPA 兜底路由把首页当成了这些文件，爬虫一律读作「没有这个文件」的假 200），渠道覆盖矩阵（`src/channels.ts`）则按标签重合度给每个项目和 17 个发布渠道（V2EX、LinuxDO、少数派、Show HN、r/SideProject、itch.io……）打分，让你一眼看出还没发过的渠道。
+- **Discover（逐站）** —— 页面体检（`src/audit/page-checks.ts`）对每个被跟踪的站点——zone 级 Web Analytics 站点下的每个子域，加上每个项目的主页，不管有没有公开仓库——抓首页的服务端 HTML 和 sitemap，看不跑 JavaScript 的爬虫拿到什么：`<title>` 与 meta description 长度合适（按显示宽度算，中日韩字符记 2）、恰好一个 `<h1>`、canonical 指向本站域名、`og:image` 真能返回 200 `image/*`、JSON-LD 能解析、可见文字足够（不是 SPA 空壳）、sitemap 非空且没有带 `?` 或别的域名的网址。有意为之的例外（不是网站的 API Worker、canonical 指向主域的别名、某站故意不做的某项）写在 `CONFIG.pageAudit` 里并注明原因。结果显示在各站的 `/s/<host>` 页。
 - **Act（行动）** —— 每一项审计失败和每一个高分未发渠道，都会变成 `todos` 表里的一行，展示在 dashboard 和 `/api/todos` 上——是一个具体的下一步动作，而不只是一份报告。
 
 整个系统跑在一个 Worker 里：一个谁都能看的公开 SSR dashboard（`/`、`/trends`、`/p/:project`、`/matrix`、`/todos`、`/posts`、`/impact`），加同一套用 `ADMIN_TOKEN` 保护的写入路径的两种入口——给 curl/脚本用的 JSON admin API（`/api/admin/*`），以及在浏览器 `/login` 登录后，dashboard 页面本身出现的真实控件（复选框、每格状态选择器、登记帖子表单——见下方"浏览器登录"一节）。除 `/api/admin/*`、`/ui/*`、`/login` 外，所有 GET 响应都会经过 Workers Cache API——在自定义域名下（非裸 `workers.dev` 子域）会带来真正的边缘缓存，叠加在 `max-age=60` 的浏览器缓存之上；已登录的请求永远跳过这个缓存，拿到的是现算的私有渲染。
@@ -79,11 +80,14 @@ curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?source
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=audit&shard=2" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
+# 页面体检分片同理（响应里的 seoShards 是分片数）
+curl -X POST "https://beacon.<你的子域>.workers.dev/api/admin/collect?sources=seo&shard=0" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
 打开 `https://beacon.<你的子域>.workers.dev/`——总览页此时应该已经显示出 `src/config.ts` 里每个项目的 star/流量数据。
 
-定时配置只占一条 cron：`0,10,20,30,40,50 1 * * *`。按计划触发时间（UTC）路由：01:00 采集 GitHub、01:10 采集帖子、01:20 采集分析数据，01:30／01:40／01:50 分别执行审计分片 0／1／2（每个分片装在一次调用 50 个 subrequest 的预算里；分片数超过 `src/schedule.ts` 里的分钟数、或该列表与 `wrangler.toml` 不一致，测试会直接失败）。配置传播期间仍兼容旧的三条表达式，但仅允许其原有时间。每组拥有独立请求预算。统计窗口使用最近 N 个完整 UTC 日，不含今天；Cloudflare 和 GoatCounter 每次重新采集最近三个完整日。没有记录的指标返回 `null`／显示缺失，不能当成零。成功采集确认的空日期才可记为零；部分覆盖和失败来源会明确标记。
+定时配置只占一条 cron：`0,10,20,30,35,40,45,50,55 1 * * *`。按计划触发时间（UTC）路由：01:00 采集 GitHub、01:10 采集帖子、01:20 采集分析数据，01:30／01:40／01:50 分别执行仓库审计分片 0／1／2，01:35／01:45／01:55 分别执行页面体检分片 0／1／2（每个分片装在一次调用 50 个 subrequest 的预算里；分片数超过 `src/schedule.ts` 里的分钟数、或该列表与 `wrangler.toml` 不一致，测试会直接失败）。配置传播期间仍兼容旧的三条表达式，但仅允许其原有时间。每组拥有独立请求预算。统计窗口使用最近 N 个完整 UTC 日，不含今天；Cloudflare 和 GoatCounter 每次重新采集最近三个完整日。没有记录的指标返回 `null`／显示缺失，不能当成零。成功采集确认的空日期才可记为零；部分覆盖和失败来源会明确标记。
 
 ## GoatCounter（可选）
 
@@ -150,16 +154,16 @@ curl -X PUT https://beacon.<子域>.workers.dev/api/admin/todos \
 
 **手动触发一次采集或回填**（和上面部署步骤里用的是同一组路由）：
 
-每次必须指定 `sources`：`github`、`posts`、`audit` 各自单独运行；`goatcounter,cloudflare,pages,rum` 可以选任意子集。省略、空值、未知来源或跨组组合返回 400，且不会启动采集。上面的部署步骤列出完整调用。审计响应中的 `auditShards` 是分片总数，按 `shard=0` 到 `auditShards - 1` 分别调用。
+每次必须指定 `sources`：`github`、`posts`、`audit`、`seo` 各自单独运行；`goatcounter,cloudflare,pages,rum` 可以选任意子集。省略、空值、未知来源或跨组组合返回 400，且不会启动采集。上面的部署步骤列出完整调用。响应中的 `auditShards`、`seoShards` 分别是 `audit`、`seo` 的分片总数，按 `shard=0` 到总数减一分别调用。
 
 ```bash
 curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=pages,rum" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 {"reports":[{"source":"pages","ok":true},{"source":"rum","ok":true}],"auditShards":3,"ranShard":0}
+# -> 200 {"reports":[{"source":"pages","ok":true},{"source":"rum","ok":true}],"auditShards":3,"seoShards":3,"ranShard":0}
 
 curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=audit&shard=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 {"reports":[{"source":"audit","ok":true}],"auditShards":3,"ranShard":1}
+# -> 200 {"reports":[{"source":"audit","ok":true}],"auditShards":3,"seoShards":3,"ranShard":1}
 
 curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer $ADMIN_TOKEN"

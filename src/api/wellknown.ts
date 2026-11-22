@@ -62,6 +62,7 @@ Interface language: Chinese
 - Request counts per day for the author's Cloudflare Workers and Pages Functions.
 - Posts made about each project (V2EX, Hacker News, GitHub issues) and their replies and views over time.
 - A ten-point audit of each repository's exposure basics (description, topics, license, README visuals, social preview, robots.txt / sitemap / llms.txt on its site) with a to-do item for each failure.
+- An eight-point page audit of each tracked site's homepage and sitemap as a crawler sees it (title and description length, one h1, canonical host, og:image, JSON-LD, visible text, clean sitemap), also with a to-do item for each failure.
 
 Numbers are stored per complete UTC day. A day with no recorded row is shown as a gap, not as zero.
 

@@ -34,7 +34,7 @@ const stub: typeof fetch = async input => {
 };
 
 describe("runDailyCollect", () => {
-  it("runs all 7 sources with per-source isolation", async () => {
+  it("runs all 8 sources with per-source isolation", async () => {
     await db.insertPost(env.DB, {
       url: FAILING_POST_URL,
       platform: "v2ex",
@@ -52,7 +52,7 @@ describe("runDailyCollect", () => {
 
     const reports = await runDailyCollect(env, new Date("2026-08-01T00:00:00Z"), stub);
 
-    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum"]);
+    expect(reports.map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum", "seo"]);
 
     const github = reports.find(r => r.source === "github")!;
     expect(github.ok).toBe(true);
@@ -110,7 +110,7 @@ describe("runDailyCollect", () => {
 
     // all 7 sources recorded in source_runs
     const sourceRuns = await db.listSourceRuns(env.DB);
-    expect(sourceRuns.filter(r => !r.source.startsWith("github:")).map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum"]);
+    expect(sourceRuns.filter(r => !r.source.startsWith("github:")).map(r => r.source).sort()).toEqual(["audit", "cloudflare", "github", "goatcounter", "pages", "posts", "rum", "seo"]);
     const postsRun = sourceRuns.find(r => r.source === "posts")!;
     expect(postsRun.ok).toBe(false);
     expect(postsRun.error).toContain(FAILING_POST_URL);

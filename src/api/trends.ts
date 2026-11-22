@@ -9,7 +9,7 @@
 //
 // Five D1 queries regardless of fleet size (see the fleet-wide readers in
 // src/db.ts for why that matters).
-import type { Env, SourceRun, RepoDaily } from "../types";
+import type { Env, SourceRun, RepoDaily, CheckResult } from "../types";
 import { CONFIG, isZoneSite, siteFor, siteHosts } from "../config";
 import { classifyDay } from "../impact/classify";
 import { shiftDate } from "../impact/attribute";
@@ -22,7 +22,8 @@ import {
   getSiteReferrerSince,
   getStarHistoryFrom,
   getWorkerDailyRange,
-  listSourceRuns
+  listSourceRuns,
+  listPageAuditResults
 } from "../db";
 import { SURFACES, classifyReferrer, type SurfaceId } from "../surfaces";
 
@@ -293,6 +294,8 @@ export interface SiteDetail {
   referrerDaily: { date: string; referrer: string; pageviews: number; visits: number }[];
   referrerSince: string | null;
   sources: SourceRun[];
+  /** Page-level SEO audit results on this host, one group per audited page (src/audit/page-run.ts). */
+  pageAudit: { key: string; results: (CheckResult & { checkedAt: string })[] }[];
 }
 
 const HOSTNAME = /^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$/;
@@ -310,12 +313,13 @@ export async function buildSiteDetail(
   const dates = windowDates(today, days);
   const prevDates = windowDates(shiftDate(today, -days), days);
 
-  const [rows, firstDate, referrerDaily, referrerSince, sources] = await Promise.all([
+  const [rows, firstDate, referrerDaily, referrerSince, sources, pageAudit] = await Promise.all([
     getSiteDailyForSite(db, host, prevDates[0], today),
     getSiteFirstDate(db, host),
     getSiteReferrerDaily(db, host, days, today),
     getSiteReferrerSince(db),
-    listSourceRuns(db)
+    listSourceRuns(db),
+    listPageAuditResults(db, host)
   ]);
   const configured = CONFIG.sites.flatMap(siteHosts).some(h => h.toLowerCase() === host);
   if (!configured && firstDate === null) return null;
@@ -354,6 +358,7 @@ export async function buildSiteDetail(
     referrers: [...totals.values()].sort((a, b) => b.pageviews - a.pageviews || a.referrer.localeCompare(b.referrer)),
     referrerDaily: referrerDaily.map(r => ({ date: r.date, referrer: r.referrer, pageviews: r.pageviews, visits: r.visits })),
     referrerSince,
-    sources
+    sources,
+    pageAudit
   };
 }

@@ -20,7 +20,7 @@ import { dayChart, hasGaps, icon, rankList, sparkBars, statTile, sumOrNull, wind
 type NavKey = "overview" | "trends" | "matrix" | "todos" | "posts" | "impact" | null;
 
 const SOURCE_LABELS: Record<string, string> = { audit: "体检", matrix: "矩阵", manual: "手动" };
-const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", cloudflare: "Cloudflare", audit: "体检" };
+const SOURCE_NAMES: Record<string, string> = { github: "GitHub", posts: "帖子", goatcounter: "GoatCounter", cloudflare: "Cloudflare", audit: "体检", seo: "页面体检" };
 const PLATFORM_LABELS: Record<Platform, string> = { v2ex: "V2EX", linuxdo: "LinuxDO", hn: "HN", reddit: "Reddit", github: "GitHub" };
 const CHECK_LABELS: Record<string, string> = {
   description: "description ≥ 20 字符",
@@ -32,7 +32,15 @@ const CHECK_LABELS: Record<string, string> = {
   "readme-links": "README 链接可用",
   "social-preview": "social preview 图",
   homepage: "homepage 字段",
-  "well-known": "robots / sitemap / llms.txt"
+  "well-known": "robots / sitemap / llms.txt",
+  "seo-title": "title 长度合适",
+  "seo-description": "meta description 长度合适",
+  "seo-h1": "恰好一个 h1",
+  "seo-canonical": "canonical 指向本站",
+  "seo-og-image": "og:image 是真图",
+  "seo-jsonld": "JSON-LD 可解析",
+  "seo-text": "服务端 HTML 有可见文字",
+  "seo-sitemap": "sitemap 干净"
 };
 
 function sourceLabel(s: string): string {
@@ -143,6 +151,14 @@ interface ActionItem {
 
 const ACTION_ITEMS_LIMIT = 5;
 
+// Where a todo's fix lives. Repo-audit todos are filed under a project name;
+// page-audit todos under a page key (a host, or host/path), whose results are
+// shown on that host's site page rather than on any project page.
+function todoHref(project: string): string {
+  if (CONFIG.projects.some(p => p.name === project)) return `/p/${encodeURIComponent(project)}`;
+  return `/s/${encodeURIComponent(project.split("/")[0])}`;
+}
+
 // 「本周建议行动」= top open todos first, then top scored channel suggestions
 // filling any remaining slots up to 5 total (both inputs already arrive
 // priority/score-sorted from src/api/public.ts's buildOverview).
@@ -152,7 +168,7 @@ function actionItems(o: Overview): ActionItem[] {
     priClass: `p${t.priority}`,
     srcLabel: sourceLabel(t.source),
     title: t.title,
-    href: `/p/${encodeURIComponent(t.project)}`,
+    href: todoHref(t.project),
     linkLabel: "去修复 →"
   }));
   const remaining = ACTION_ITEMS_LIMIT - todoItems.length;
@@ -827,13 +843,21 @@ function matrixFormCell(
 
 // ---- todos -------------------------------------------------------------------
 
+// The title says what to do; the detail under it says what the check found on
+// its latest run (which URL, which length, which status), so the todo can be
+// acted on without opening the project or site page first.
+function todoTitleHtml(t: Todo, cls?: string): string {
+  const detail = t.detail ? `<span class="todo-detail">${esc(t.detail)}</span>` : "";
+  return `<span${cls ? ` class="${cls}"` : ""}>${esc(t.title)}${detail}</span>`;
+}
+
 function renderOpenTodoItem(t: Todo, authed: boolean): string {
   const checkbox = authed
     ? `<input type="checkbox" name="done" value="1" aria-label="标记为已完成">`
     : `<input type="checkbox" disabled>`;
   const rowInner =
     `${checkbox}<span class="pri p${t.priority}">P${t.priority}</span>` +
-    `<span class="proj">${esc(t.project)}</span>${esc(t.title)}<span class="src">${esc(sourceLabel(t.source))}</span>`;
+    `<span class="proj">${esc(t.project)}</span>${todoTitleHtml(t)}<span class="src">${esc(sourceLabel(t.source))}</span>`;
   if (!authed) return `<li>${rowInner}</li>`;
   return (
     `<li><form method="post" action="/ui/todo" class="blend">` +
@@ -849,7 +873,7 @@ function renderDoneTodoItem(t: Todo, authed: boolean, returnTo: string): string 
     : `<input type="checkbox" checked disabled>`;
   const rowInner =
     `${checkbox}<span class="pri p${t.priority}">P${t.priority}</span>` +
-    `<span class="proj">${esc(t.project)}</span><span class="title">${esc(t.title)}</span>` +
+    `<span class="proj">${esc(t.project)}</span>${todoTitleHtml(t, "title")}` +
     `<span class="effect">${t.doneAt ? esc(fmtDateTime(t.doneAt)) : "—"}</span>`;
   if (!authed) return `<li class="done">${rowInner}</li>`;
   return (
@@ -1010,7 +1034,7 @@ function impactRow(i: EventImpact): string {
   return (
     `<li><div class="ev-head"><span class="ev-date">${esc(e.date)}</span>` +
     `<span class="src">${esc(kind)}</span>${platform}` +
-    `<a class="proj" href="/p/${encodeURIComponent(e.project)}">${esc(e.project)}</a>` +
+    `<a class="proj" href="${todoHref(e.project)}">${esc(e.project)}</a>` +
     `<span class="ev-title ${cls}">${title}</span></div>` +
     attributionLine(i.attribution) +
     `<div class="ev-wins">${windowCell("之前 7 天", i.before, beforeNote)}` +
@@ -1221,6 +1245,24 @@ const REFERRER_ROWS_LIMIT = 15;
 const REFERRER_DAILY_ROWS_LIMIT = 150;
 const TIP_REFERRERS = 3;
 
+// 页面体检 · the page-level SEO audit for this host, same list as the project
+// page's 曝光体检. A host with two audited pages (defiabell.github.io carries
+// two project homepages under paths) gets one labelled list per page.
+function pageAuditCard(groups: SiteDetail["pageAudit"]): string {
+  if (groups.length === 0) return "";
+  const all = groups.flatMap(g => g.results);
+  const fail = all.filter(a => a.status === "fail").length;
+  const lists = groups
+    .map(g => (groups.length > 1 ? `<p class="sec-cap">${esc(g.key)}</p>` : "") + `<ul class="audit">${g.results.map(renderAuditItem).join("")}</ul>`)
+    .join("");
+  return `<section class="card">
+<h2>${icon("todos")}页面体检</h2>
+<p class="sub">首页与 sitemap 每天检查一次 · ${all.length} 项检查 · ${fail} 项待修</p>
+${auditMeter(all)}
+${lists}
+</section>`;
+}
+
 export function renderSite(d: SiteDetail, authed: boolean): string {
   const { dates } = d;
   const period = `近 ${d.days} 天`;
@@ -1312,6 +1354,7 @@ ${referrerRows.length ? rankList(referrerRows, { valueWidth: 88 }) + moreReferre
 <div class="scroll"><table class="daily"><tr><th>日期（UTC）</th><th class="num">浏览</th><th class="num">访问</th><th class="num">带来源</th></tr>${dayRows}</table></div>
 </section>
 </div>
+${pageAuditCard(d.pageAudit)}
 <details class="card tbl"${d.days <= 30 ? " open" : ""}>
 <summary><h2 style="display:inline-flex">${icon("table")}来源 · 按天</h2></summary>
 <p class="sub">哪一天、从哪里、来了多少，最新在上。</p>

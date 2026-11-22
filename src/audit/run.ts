@@ -1,4 +1,4 @@
-import type { Env } from "../types";
+import type { Env, CheckResult } from "../types";
 import type { ProjectConfig } from "../config";
 import type { FetchFn } from "../collect/github";
 import { ghHeaders } from "../collect/github";
@@ -93,22 +93,33 @@ export function auditShards(
   projects: ProjectConfig[],
   cap: number = SUBREQUEST_CAP
 ): ProjectConfig[][] {
-  const shards: ProjectConfig[][] = [];
-  let current: ProjectConfig[] = [];
+  return shardByCost(projects, projectAuditCost, p => `project ${p.name}`, cap);
+}
+
+// The greedy, contiguous split behind auditShards, shared with the page audit
+// (./page-run.ts) so both obey the same budget rule the same way.
+export function shardByCost<T>(
+  items: T[],
+  costOf: (item: T) => number,
+  nameOf: (item: T) => string,
+  cap: number = SUBREQUEST_CAP
+): T[][] {
+  const shards: T[][] = [];
+  let current: T[] = [];
   let cost = 0;
-  for (const p of projects) {
-    const c = projectAuditCost(p);
-    // A single repo that cannot fit alone would be dropped by the greedy loop
+  for (const item of items) {
+    const c = costOf(item);
+    // A single item that cannot fit alone would be dropped by the greedy loop
     // below and never audited. That is impossible with today's constants, so
     // it is a programming error rather than a runtime condition — say so
     // instead of silently returning a fleet with a hole in it.
-    if (c > cap) throw new Error(`project ${p.name} alone costs ${c} subrequests, over the ${cap} cap`);
+    if (c > cap) throw new Error(`${nameOf(item)} alone costs ${c} subrequests, over the ${cap} cap`);
     if (cost + c > cap) {
       shards.push(current);
       current = [];
       cost = 0;
     }
-    current.push(p);
+    current.push(item);
     cost += c;
   }
   if (current.length > 0) shards.push(current);
@@ -445,38 +456,53 @@ export async function runAudit(
     try {
       const input = await collectAuditInput(env.GITHUB_TOKEN, project, fetchFn);
       const results = runRepoChecks(input);
-      await upsertAuditResults(env.DB, project.name, results, checkedAt);
-      for (const result of results) {
-        const title = todoTitle(result.checkId, input);
-        if (result.status === "fail") {
-          await insertTodoIfNew(env.DB, {
-            project: project.name,
-            source: "audit",
-            title,
-            priority: result.priority,
-            status: "open"
-          });
-          // insertTodoIfNew is a no-op when a row with this title already
-          // exists — including one that was closed on an earlier run — so a
-          // regressed check needs this second call to bring the todo back.
-          // Together the pair is "make sure an open todo exists for this
-          // failing check", which is the actual invariant.
-          await reopenTodoByTitle(env.DB, project.name, "audit", title);
-        } else if (result.status === "pass") {
-          // The check that generated this todo (if any) now passes — close it.
-          // Safe to call unconditionally: it's a no-op UPDATE when no open todo
-          // with this exact title exists. Relies on todoTitle being STABLE per
-          // (project, checkId) regardless of check-specific detail (e.g.
-          // readme-links no longer embeds the broken-link list in the title) —
-          // otherwise this title wouldn't match the row insertTodoIfNew created
-          // on an earlier failing run with a different detail.
-          await closeTodoByTitle(env.DB, project.name, "audit", title, checkedAt);
-        }
-      }
+      await applyAuditResults(env.DB, project.name, results, checkId => todoTitle(checkId, input), checkedAt);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       failures.push(`${project.repo}: ${msg}`);
     }
   }
   if (failures.length > 0) throw new Error(failures.join("; "));
+}
+
+// Lands one audited subject's results and keeps its todos in step with them:
+// a failing check gets an open todo carrying the latest finding, a passing one
+// closes it. Shared by the repo audit above and the page audit (./page-run.ts).
+export async function applyAuditResults(
+  db: D1Database,
+  project: string,
+  results: CheckResult[],
+  titleFor: (checkId: string) => string,
+  checkedAt: string
+): Promise<void> {
+  await upsertAuditResults(db, project, results, checkedAt);
+  for (const result of results) {
+    const title = titleFor(result.checkId);
+    if (result.status === "fail") {
+      await insertTodoIfNew(db, {
+        project,
+        source: "audit",
+        title,
+        priority: result.priority,
+        status: "open",
+        detail: result.detail
+      });
+      // insertTodoIfNew is a no-op when a row with this title already
+      // exists — including one that was closed on an earlier run — so a
+      // regressed check needs this second call to bring the todo back.
+      // Together the pair is "make sure an open todo exists for this
+      // failing check", which is the actual invariant. It also refreshes the
+      // stored detail, which may have changed while the title did not.
+      await reopenTodoByTitle(db, project, "audit", title, result.detail);
+    } else if (result.status === "pass") {
+      // The check that generated this todo (if any) now passes — close it.
+      // Safe to call unconditionally: it's a no-op UPDATE when no open todo
+      // with this exact title exists. Relies on the title being STABLE per
+      // (project, checkId) regardless of check-specific detail (e.g.
+      // readme-links no longer embeds the broken-link list in the title) —
+      // otherwise this title wouldn't match the row insertTodoIfNew created
+      // on an earlier failing run with a different detail.
+      await closeTodoByTitle(db, project, "audit", title, checkedAt);
+    }
+  }
 }

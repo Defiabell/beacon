@@ -151,6 +151,7 @@ ul.plain li .effect { margin-left: auto; font-variant-numeric: tabular-nums; }
 .filters a, .filters button { font: inherit; text-decoration: none; border: 1px solid var(--border); background: var(--surface-1); color: var(--ink-2); border-radius: 999px; padding: 3px 12px; cursor: pointer; }
 .filters a.on, .filters button.on { color: var(--ink-1); font-weight: 600; border-color: var(--series-1); }
 li.done { color: var(--muted); } li.done .title { text-decoration: line-through; }
+.todo-detail { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
 li.done .effect { margin-left: auto; font-size: 12px; color: var(--good-text); white-space: nowrap; }
 .sec-cap { font-size: 12px; color: var(--muted); font-weight: 600; margin: 14px 0 4px; }
 .hint { font-size: 12px; color: var(--muted); margin-top: 10px; }

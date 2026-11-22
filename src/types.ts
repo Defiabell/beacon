@@ -24,5 +24,7 @@ export interface CheckResult { checkId: string; status: "pass" | "fail" | "na"; 
 // doneAt is only ever populated when status is "done" (set by setTodoStatus);
 // optional rather than required because getTopOpenTodos never selects it (its
 // rows are always status="open", so it would always be undefined there).
-export interface Todo { id?: number; project: string; source: "audit" | "matrix" | "manual"; title: string; priority: number; status: "open" | "done"; doneAt?: string | null; }
+// detail: what the generating check found on its latest failing run (audit
+// todos only; see migrations/0005_todo_detail.sql).
+export interface Todo { id?: number; project: string; source: "audit" | "matrix" | "manual"; title: string; priority: number; status: "open" | "done"; doneAt?: string | null; detail?: string | null; }
 export interface SourceRun { source: string; lastRunAt: string; ok: boolean; error: string | null; }

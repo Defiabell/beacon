@@ -12,6 +12,7 @@ beacon is a single **Cloudflare Worker + D1 database**, organized around three l
 
 - **Measure** — a daily collection schedule (GitHub at 01:00 UTC, posts at 01:10, analytics at 01:20; see `wrangler.toml`) pulls each tracked repo's GitHub traffic/clones/star history (`src/collect/github.ts`), refreshes metrics for every post you've registered on V2EX/LinuxDO/Hacker News/Reddit/GitHub issues & PRs (`src/collect/posts.ts`), reads this Cloudflare account's own request counts for every Worker (`src/collect/cloudflare.ts`) and every Pages project's Functions (`src/collect/pages.ts` — a separate GraphQL dataset and REST project lookup, since Pages Functions traffic is invisible to the Worker one), pulls RUM pageviews **and per-referrer pageloads** for the sites you list in `src/config.ts` (`src/collect/rum.ts` — the referrer split is what makes AI answer engines measurable, see below), and — optionally — daily pageviews from a GoatCounter site (`src/collect/goatcounter.ts`).
 - **Discover** — a repo exposure audit (`src/audit/checks.ts`) runs 10 checks per tracked repo (description length, ≥3 topics, LICENSE present, English intro in the README, screenshot/GIF in the README, release assets for macOS projects, no broken README links, custom social-preview image, homepage synced, and — for a project whose homepage is an HTML page (an API-only Worker root is n/a) — that `/robots.txt`, the sitemap it declares and `/llms.txt` are served as real files: a 2xx with a `text/html` content-type is a SPA catch-all answering with the index page, a "fake 200" every crawler reads as "no such file"), and a channel-coverage matrix (`src/channels.ts`) scores each project against 17 launch channels (V2EX, LinuxDO, 少数派, Show HN, r/SideProject, itch.io, …) by tag overlap, so you can see at a glance where you haven't posted yet.
+- **Discover, per site** — a page audit (`src/audit/page-checks.ts`) fetches the server HTML of every tracked site's homepage — each host of a zone-level Web Analytics site plus every project homepage, whether or not it has a public repo — and its sitemap, and checks what a crawler that does not run JavaScript gets: a `<title>` and meta description of sane length (measured in display width, a CJK character counting two), exactly one `<h1>`, a canonical on the site's own host, an `og:image` that answers 200 `image/*`, JSON-LD that parses, enough visible text to not be an empty SPA shell, and a sitemap that is non-empty with no query-string or off-host URLs. Deliberate exceptions (an API Worker that is not a site, an alias that canonicalises to its primary host, a check a site skips on purpose) are listed in `CONFIG.pageAudit` with their reasons. Results show on each site's `/s/<host>` page.
 - **Act** — every failed audit check and every high-scoring unposted channel becomes a row in `todos`, surfaced on the dashboard and via `/api/todos` — a concrete next action instead of just a report.
 
 **Where traffic comes from, including AI answer engines (GEO).** Two classifiers share one surface list (`src/surfaces.ts`): GitHub's repo referrers and Cloudflare Web Analytics' `refererHost` for the sites. Both bucket referrers into AI answer engines (chatgpt.com, perplexity.ai, claude.ai, gemini.google.com, copilot.microsoft.com, grok.com, duck.ai, …; plus `bing.com/copilotsearch`, `x.com/i/grok` and `kagi.com/assistant` by referrer path), search, curation, community, RSS, code hosts and your own sites, and list anything unrecognised by name. The overview shows an "AI 引荐" count per site (7 days) and a site-wide breakdown (30 days); each project page lists every AI arrival to its homepage host per day. Known blind spots, by construction: a referrer never carries a query string, so Google AI Mode (`udm=50`) and DuckDuckGo's `?ia=chat` are indistinguishable from plain search and stay counted there; and a JS beacon only sees people who click through — AI crawlers that fetch pages without a browser are invisible here.
@@ -84,11 +85,14 @@ curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sour
   -H "Authorization: Bearer <ADMIN_TOKEN>"
 curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=audit&shard=1" \
   -H "Authorization: Bearer <ADMIN_TOKEN>"
+# Page audit shards likewise (the response's seoShards says how many).
+curl -X POST "https://beacon.<your-subdomain>.workers.dev/api/admin/collect?sources=seo&shard=0" \
+  -H "Authorization: Bearer <ADMIN_TOKEN>"
 ```
 
 Open `https://beacon.<your-subdomain>.workers.dev/` — the overview should now show stars/traffic for every project in `src/config.ts`.
 
-The configuration uses one Cron Trigger: `0,10,20,30,40,50 1 * * *`. Routing uses the scheduled UTC time: GitHub at 01:00, posts at 01:10, analytics at 01:20, and audit shards 0/1/2 at 01:30/01:40/01:50. Each shard is a slice of the fleet that fits one invocation's 50-subrequest budget (`src/audit/run.ts`); the test suite fails if the shards outgrow the minutes listed in `src/schedule.ts`, or if that list drifts from `wrangler.toml`. The previous expressions remain accepted at their original times while trigger changes propagate. Each invocation has its own request budget. Metric windows cover the latest N complete UTC days, excluding today; Cloudflare and GoatCounter collection refreshes the last three complete days. Missing measurements return `null` and display as missing, not zero. Only confirmed empty days from successful collection become zero; partial coverage and source failures are marked explicitly.
+The configuration uses one Cron Trigger: `0,10,20,30,35,40,45,50,55 1 * * *`. Routing uses the scheduled UTC time: GitHub at 01:00, posts at 01:10, analytics at 01:20, repo-audit shards 0/1/2 at 01:30/01:40/01:50, and page-audit shards 0/1/2 at 01:35/01:45/01:55. Each shard is a slice of the fleet that fits one invocation's 50-subrequest budget (`src/audit/run.ts`); the test suite fails if the shards outgrow the minutes listed in `src/schedule.ts`, or if that list drifts from `wrangler.toml`. The previous expressions remain accepted at their original times while trigger changes propagate. Each invocation has its own request budget. Metric windows cover the latest N complete UTC days, excluding today; Cloudflare and GoatCounter collection refreshes the last three complete days. Missing measurements return `null` and display as missing, not zero. Only confirmed empty days from successful collection become zero; partial coverage and source failures are marked explicitly.
 
 ## GoatCounter (optional)
 
@@ -155,16 +159,16 @@ curl -X PUT https://beacon.<subdomain>.workers.dev/api/admin/todos \
 
 **Trigger a collection or backfill manually** (same routes used in the deploy steps above):
 
-Each request must specify `sources`: run `github`, `posts`, and `audit` separately; any subset of `goatcounter,cloudflare,pages,rum` may run together. Omitted, empty, unknown, or cross-group selections return 400 before collecting. The deploy steps above show the full sequence. The audit response includes `auditShards`; call each index from `shard=0` through `auditShards - 1`.
+Each request must specify `sources`: run `github`, `posts`, `audit` and `seo` separately; any subset of `goatcounter,cloudflare,pages,rum` may run together. Omitted, empty, unknown, or cross-group selections return 400 before collecting. The deploy steps above show the full sequence. The response includes `auditShards` and `seoShards`; call each index from `shard=0` through the count minus one for `audit` and `seo` respectively.
 
 ```bash
 curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=pages,rum" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 {"reports":[{"source":"pages","ok":true},{"source":"rum","ok":true}],"auditShards":3,"ranShard":0}
+# -> 200 {"reports":[{"source":"pages","ok":true},{"source":"rum","ok":true}],"auditShards":3,"seoShards":3,"ranShard":0}
 
 curl -X POST "https://beacon.<subdomain>.workers.dev/api/admin/collect?sources=audit&shard=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
-# -> 200 {"reports":[{"source":"audit","ok":true}],"auditShards":3,"ranShard":1}
+# -> 200 {"reports":[{"source":"audit","ok":true}],"auditShards":3,"seoShards":3,"ranShard":1}
 
 curl -X POST https://beacon.<subdomain>.workers.dev/api/admin/backfill \
   -H "Authorization: Bearer $ADMIN_TOKEN"

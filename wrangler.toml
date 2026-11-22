@@ -4,10 +4,11 @@ compatibility_date = "2026-07-01"
 
 [triggers]
 # Separate invocation budgets: GitHub at 01:00 UTC, posts at 01:10,
-# analytics at 01:20, then the three audit shards at 01:30/01:40/01:50. A
-# minute list keeps the account-level Cron Trigger count at one. Routing:
-# src/schedule.ts — AUDIT_MINUTES there must match this list exactly.
-crons = ["0,10,20,30,40,50 1 * * *"]
+# analytics at 01:20, the three repo-audit shards at 01:30/01:40/01:50 and the
+# three page-audit (SEO) shards at 01:35/01:45/01:55. A minute list keeps the
+# account-level Cron Trigger count at one. Routing: src/schedule.ts —
+# AUDIT_MINUTES and SEO_MINUTES there must match this list exactly.
+crons = ["0,10,20,30,35,40,45,50,55 1 * * *"]
 
 [observability]
 enabled = true

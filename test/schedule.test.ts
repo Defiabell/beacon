@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { env } from "cloudflare:test";
-import { AUDIT_MINUTES, COLLECT_CRON, scheduledCollection } from "../src/schedule";
+import { AUDIT_MINUTES, COLLECT_CRON, SEO_MINUTES, scheduledCollection } from "../src/schedule";
 import wranglerToml from "../wrangler.toml?raw";
 import { runDailyCollect } from "../src/collect/run";
 import { CONFIG } from "../src/config";
@@ -43,6 +43,18 @@ describe("scheduled collection budgets", () => {
     expect(crons).toEqual([COLLECT_CRON]);
     const minutes = COLLECT_CRON.split(" ")[0].split(",").map(Number);
     for (const m of AUDIT_MINUTES) expect(minutes).toContain(m);
+    for (const m of SEO_MINUTES) expect(minutes).toContain(m);
+  });
+
+  it("routes each page-audit (SEO) minute to its shard, and the six-minute expression it replaced only to its own minutes", () => {
+    SEO_MINUTES.forEach((minute, auditShard) => {
+      expect(scheduledCollection(COLLECT_CRON, +day + minute * 60000 + 4117)).toEqual({ sources: ["seo"], auditShard });
+    });
+    for (const minute of [0, 10, 20, 30, 40, 50]) {
+      expect(scheduledCollection("0,10,20,30,40,50 1 * * *", +day + minute * 60000))
+        .toEqual(scheduledCollection(COLLECT_CRON, +day + minute * 60000));
+    }
+    expect(() => scheduledCollection("0,10,20,30,40,50 1 * * *", +day + 35 * 60000)).toThrow("Unknown collection schedule");
   });
 
   it("routes every daily group and every audit shard explicitly", () => {

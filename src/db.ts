@@ -316,6 +316,26 @@ export async function listAuditResults(
   return res.results;
 }
 
+// The page-level audit (src/audit/page-run.ts) files results under the page
+// key: the hostname, or hostname + path for a homepage under a path. This
+// returns every page key on one host, grouped, keys in order.
+export async function listPageAuditResults(
+  db: D1Database,
+  host: string
+): Promise<{ key: string; results: (CheckResult & { checkedAt: string })[] }[]> {
+  const res = await db
+    .prepare(
+      `SELECT project AS key, check_id AS checkId, status, detail, priority, checked_at AS checkedAt
+       FROM audit_results WHERE check_id LIKE 'seo-%' AND (project=?1 OR substr(project, 1, length(?1) + 1)=?1 || '/')
+       ORDER BY project ASC, priority ASC, check_id ASC`
+    )
+    .bind(host)
+    .all<CheckResult & { checkedAt: string; key: string }>();
+  const groups = new Map<string, (CheckResult & { checkedAt: string })[]>();
+  for (const { key, ...r } of res.results) groups.set(key, [...(groups.get(key) ?? []), r]);
+  return [...groups].map(([key, results]) => ({ key, results }));
+}
+
 // No samples is null, never a fabricated zero.
 export async function getSitePvSum(db: D1Database, days: number, today = new Date().toISOString().slice(0, 10)): Promise<number | null> {
   const row = await db.prepare(
@@ -344,10 +364,10 @@ export async function upsertAuditResults(
 export async function insertTodoIfNew(db: D1Database, t: Todo): Promise<void> {
   await db
     .prepare(
-      `INSERT OR IGNORE INTO todos (project, source, title, priority, status, created_at)
-       VALUES (?1,?2,?3,?4,?5, datetime('now'))`
+      `INSERT OR IGNORE INTO todos (project, source, title, priority, status, created_at, detail)
+       VALUES (?1,?2,?3,?4,?5, datetime('now'), ?6)`
     )
-    .bind(t.project, t.source, t.title, t.priority, t.status)
+    .bind(t.project, t.source, t.title, t.priority, t.status, t.detail ?? null)
     .run();
 }
 
@@ -365,16 +385,28 @@ export async function insertTodoIfNew(db: D1Database, t: Todo): Promise<void> {
 // This does override a manual "done" tick on an audit-sourced todo, and that is
 // the intended contract: an audit todo is derived state, and the check — not the
 // checkbox — decides whether the work is finished.
+//
+// `detail`, when given, replaces the stored finding on the row whether it was
+// open or done: the title never changes between runs, so this is the only
+// place the todo learns that the current value moved (a title that got longer
+// but is still too short, a different broken URL).
 export async function reopenTodoByTitle(
   db: D1Database,
   project: string,
   source: Todo["source"],
-  title: string
+  title: string,
+  detail?: string
 ): Promise<void> {
   await db
     .prepare(`UPDATE todos SET status='open', done_at=NULL WHERE status='done' AND project=?1 AND source=?2 AND title=?3`)
     .bind(project, source, title)
     .run();
+  if (detail !== undefined) {
+    await db
+      .prepare(`UPDATE todos SET detail=?4 WHERE project=?1 AND source=?2 AND title=?3`)
+      .bind(project, source, title, detail)
+      .run();
+  }
 }
 
 // Closes (status='open' -> 'done', done_at=doneAt) any open todo matching this
@@ -415,8 +447,8 @@ export async function setTodoStatus(
 // item was completed.
 export async function listTodos(db: D1Database, status?: "open" | "done"): Promise<Todo[]> {
   const sql = status
-    ? `SELECT id, project, source, title, priority, status, done_at AS doneAt FROM todos WHERE status=?1 ORDER BY id`
-    : `SELECT id, project, source, title, priority, status, done_at AS doneAt FROM todos ORDER BY id`;
+    ? `SELECT id, project, source, title, priority, status, done_at AS doneAt, detail FROM todos WHERE status=?1 ORDER BY id`
+    : `SELECT id, project, source, title, priority, status, done_at AS doneAt, detail FROM todos ORDER BY id`;
   const stmt = status ? db.prepare(sql).bind(status) : db.prepare(sql);
   const res = await stmt.all<Todo>();
   return res.results;

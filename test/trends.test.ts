@@ -370,6 +370,21 @@ describe("site page", () => {
     expect(html).not.toContain("<b>x</b>");
   });
 
+  it("shows the host's page audit, one list per audited page", async () => {
+    await db.upsertAuditResults(env.DB, "spike.test", [
+      { checkId: "seo-title", status: "fail", priority: 1, detail: "<title> too short: width 4" },
+      { checkId: "seo-h1", status: "pass", priority: 2, detail: "one <h1>" }
+    ], "2027-03-10T01:35:00Z");
+    // A repo-audit row under the same name is not a page check.
+    await db.upsertAuditResults(env.DB, "spike.test", [{ checkId: "topics", status: "fail", priority: 1, detail: "0 topic(s)" }], "2027-03-10T01:30:00Z");
+    await seed();
+    const html = renderSite((await buildSiteDetail(env, "spike.test", 7, TODAY))!, false);
+    expect(html).toContain("页面体检");
+    expect(html).toContain("2 项检查 · 1 项待修");
+    expect(html).toContain('<li class="bad">title 长度合适<span class="chip">&lt;title&gt; too short: width 4</span></li>');
+    expect(html).not.toContain("topics ≥ 3 个");
+  });
+
   it("GET /s/:host and /api/site/:host serve a recorded site", async () => {
     const yesterday = windowDates(new Date().toISOString().slice(0, 10), 1)[0];
     await db.upsertSiteDaily(env.DB, [{ site: "live.test", date: yesterday, pageviews: 3, visitors: 2 }]);

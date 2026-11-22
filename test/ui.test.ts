@@ -67,6 +67,22 @@ describe("renderOverview", () => {
     expect(html).toContain("fix readme link");
   });
 
+  it("links a page-audit todo to its host's site page, since no project page shows it", () => {
+    const overview: Overview = {
+      projects: [],
+      topTodos: [
+        { id: 1, project: "kaogu.defiabell.com", source: "audit", title: "page todo", priority: 1, status: "open" },
+        { id: 2, project: "defiabell.github.io/nightide", source: "audit", title: "path todo", priority: 1, status: "open" },
+        { id: 3, project: "nightide", source: "audit", title: "repo todo", priority: 1, status: "open" }
+      ],
+      suggestions: [], sources: [], sitePv7d: 0, surfaces: NO_SURFACES, workers: [], sites: []
+    };
+    const html = renderOverview(overview, false);
+    expect(html).toContain('href="/s/kaogu.defiabell.com"');
+    expect(html).toContain('href="/s/defiabell.github.io"');
+    expect(html).toContain('href="/p/nightide"');
+  });
+
   // A channel suggestion used to link to bare /matrix, dropping the reader at
   // the top of a 26-column table with no statement of what to do. It now points
   // at that channel's own how-to entry (renderMatrix's `id="ch-<id>"`).
@@ -556,6 +572,16 @@ describe("renderTodos", () => {
 
   it("doesn't crash on an empty list", () => {
     expect(() => renderTodos([], false)).not.toThrow();
+  });
+
+  it("shows what the check found under the todo's title, escaped", () => {
+    const todos: Todo[] = [
+      { id: 1, project: "kaogu.defiabell.com", source: "audit", title: "把 kaogu.defiabell.com 首页的 canonical 指向本站域名", priority: 1, status: "open", detail: "canonical -> https://kaogu.pages.dev/ (want <host>)" },
+      { id: 2, project: "nightide", source: "manual", title: "no detail", priority: 2, status: "open" }
+    ];
+    const html = renderTodos(todos, false);
+    expect(html).toContain('<span class="todo-detail">canonical -&gt; https://kaogu.pages.dev/ (want &lt;host&gt;)</span>');
+    expect(html.match(/class="todo-detail"/g)).toHaveLength(1);
   });
 
   // M1: the shared CSS (src/ui/layout.ts) defines `ul.plain` styling, but

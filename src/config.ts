@@ -1,3 +1,5 @@
+import type { PageCheckId } from "./audit/page-checks";
+
 export interface ProjectConfig {
   name: string;
   repo: string;
@@ -42,6 +44,21 @@ export function siteFor(sites: SiteConfig[], host: string): SiteConfig | undefin
     return h === apex || h.endsWith("." + apex) || s.hosts!.some(x => x.toLowerCase() === h);
   });
 }
+// Deliberate departures from the page-level SEO checks (src/audit/page-checks.ts),
+// keyed by the page key the audit files results under (a hostname, or
+// hostname + path). Exceptions live here rather than as ifs inside the checks,
+// so each one is written down once, with its reason, where the next pass will
+// see it.
+export interface PageAuditException {
+  // The address is not a website (an API Worker): it is not fetched at all and
+  // every page check reads n/a with this reason.
+  notASite?: string;
+  // An alias kept on purpose: canonical and sitemap URLs should name this
+  // host instead of the page's own.
+  canonicalHost?: string;
+  // Checks that do not apply here on purpose, each with its reason.
+  skip?: Partial<Record<PageCheckId, string>>;
+}
 export interface BeaconConfig {
   githubUser: string;
   projects: ProjectConfig[];
@@ -54,12 +71,28 @@ export interface BeaconConfig {
   canonicalOrigin?: string;
   // Absolute URL of the image link previews show (og:image). Omit for none.
   ogImage?: string;
+  // See PageAuditException. Which pages are audited at all is derived, not
+  // listed: every zone-level host plus every project homepage (pageAuditTargets
+  // in src/audit/page-run.ts).
+  pageAudit: Record<string, PageAuditException>;
 }
 export const CONFIG: BeaconConfig = {
   githubUser: "Defiabell",
   dashboardTitle: "Defiabell / beacon",
   canonicalOrigin: "https://beacon.defiabell.com",
   ogImage: "https://raw.githubusercontent.com/Defiabell/beacon/main/docs/social-preview.png",
+  pageAudit: {
+    // Both answer JSON, not HTML (reference: agent-workspace memory
+    // reference_defiabell_domain). Listed so the audit spends no subrequests on
+    // them; the page checks would also reach n/a on their own from the
+    // content-type, one fetch later.
+    "screen-coach.defiabell.com": { notASite: "API Worker（screen-coach 试用许可接口），不是网站" },
+    "comments.defiabell.com": { notASite: "API Worker（博客评论接口 tingfeng-comments），不是网站" },
+    // Alias of the portal kept on purpose; it serves the same page with
+    // canonical https://defiabell.com/ (set 2026-10-20) and robots pointing at
+    // the apex sitemap. Pointing elsewhere is the point, not a defect.
+    "island.defiabell.com": { canonicalHost: "defiabell.com" }
+  },
   projects: [
     // Build artifacts only (source lives in the private nightide-src); the
     // LICENSE is a deliberate all-rights-reserved notice, not an oversight.

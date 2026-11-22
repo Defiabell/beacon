@@ -7,6 +7,7 @@ import { fetchWorkerDaily } from "./cloudflare";
 import { fetchRumDaily, fetchRumReferrers, zeroFillRows, DISCOVERED_LIVE_DAYS } from "./rum";
 import { fetchPagesFunctionsDaily, fetchPagesProjects, resolvePagesFunctionsToWorkerDaily } from "./pages";
 import { runAudit } from "../audit/run";
+import { runPageAudit } from "../audit/page-run";
 import { CONFIG } from "../config";
 import {
   upsertRepoDaily,
@@ -27,8 +28,8 @@ export interface CollectorReport {
   error?: string;
 }
 
-export type SourceName = "github" | "posts" | "goatcounter" | "cloudflare" | "pages" | "rum" | "audit";
-export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "cloudflare", "pages", "rum", "audit"];
+export type SourceName = "github" | "posts" | "goatcounter" | "cloudflare" | "pages" | "rum" | "audit" | "seo";
+export const ALL_SOURCES: SourceName[] = ["github", "posts", "goatcounter", "cloudflare", "pages", "rum", "audit", "seo"];
 
 interface SourceResult {
   ok: boolean;
@@ -222,6 +223,11 @@ async function collectAudit(env: Env, fetchFn: FetchFn, shard: number): Promise<
   return { ok: true };
 }
 
+async function collectSeo(env: Env, fetchFn: FetchFn, shard: number): Promise<SourceResult> {
+  await runPageAudit(env, fetchFn, shard);
+  return { ok: true };
+}
+
 // Scheduled invocations select one bounded group (see schedule.ts). Admin
 // callers can still explicitly request a source subset. Only sources actually
 // run receive health records; GitHub additionally records per-repo health.
@@ -230,9 +236,11 @@ export async function runDailyCollect(
   now: Date,
   fetchFn: FetchFn = fetch,
   sources: SourceName[] = ALL_SOURCES,
-  // Which audit shard to run. Ignored unless "audit" is among `sources`.
-  // Each shard is a slice of the fleet small enough to fit one invocation's
-  // subrequest budget; see src/audit/run.ts auditShards.
+  // Which audit shard to run. Ignored unless "audit" or "seo" is among
+  // `sources`. Each shard is a slice of the fleet (repos for "audit", site
+  // pages for "seo") small enough to fit one invocation's subrequest budget;
+  // see auditShards in src/audit/run.ts and pageAuditShards in
+  // src/audit/page-run.ts.
   auditShard = 0
 ): Promise<CollectorReport[]> {
   const date = now.toISOString().slice(0, 10);
@@ -251,6 +259,9 @@ export async function runDailyCollect(
   if (sources.includes("rum")) reports.push(await runSource(env.DB, "rum", () => collectRum(env, date, fetchFn)));
   if (sources.includes("audit")) {
     reports.push(await runSource(env.DB, "audit", () => collectAudit(env, fetchFn, auditShard)));
+  }
+  if (sources.includes("seo")) {
+    reports.push(await runSource(env.DB, "seo", () => collectSeo(env, fetchFn, auditShard)));
   }
   return reports;
 }

@@ -4,6 +4,7 @@ import { backfillStarHistory } from "../collect/github";
 import { detectPlatform, fetchPostMetrics } from "../collect/posts";
 import { runDailyCollect, ALL_SOURCES } from "../collect/run";
 import { auditShards } from "../audit/run";
+import { pageAuditShards } from "../audit/page-run";
 import type { SourceName } from "../collect/run";
 import { CONFIG } from "../config";
 import { requireAdmin } from "../auth";
@@ -168,7 +169,7 @@ function isSourceName(s: string): s is SourceName {
 // Manual calls obey the same invocation boundaries as the daily schedule.
 // Analytics sources may be selected together; GitHub, posts and each audit
 // shard must run in separate requests to preserve their subrequest budgets.
-const SOURCE_GROUP_HELP = "choose one group: github | posts | goatcounter,cloudflare,pages,rum (any subset) | audit";
+const SOURCE_GROUP_HELP = "choose one group: github | posts | goatcounter,cloudflare,pages,rum (any subset) | audit | seo";
 const ANALYTICS_SOURCES: SourceName[] = ["goatcounter", "cloudflare", "pages", "rum"];
 
 function parseSourcesParam(url: URL): SourceName[] | { error: string } {
@@ -205,7 +206,10 @@ async function handleCollect(req: Request, env: Env, fetchFn: FetchFn): Promise<
   const shard = parseShardParam(url);
   if (typeof shard !== "number") return jsonResponse(shard, 400);
   const reports = await runDailyCollect(env, new Date(), fetchFn, sources, shard);
-  return jsonResponse({ reports, auditShards: auditShards(CONFIG.projects).length, ranShard: shard }, 200);
+  return jsonResponse(
+    { reports, auditShards: auditShards(CONFIG.projects).length, seoShards: pageAuditShards().length, ranShard: shard },
+    200
+  );
 }
 
 // Per-repo isolation mirrors collectGithub (src/collect/run.ts): one repo's
